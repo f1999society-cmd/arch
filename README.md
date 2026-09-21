@@ -7,26 +7,50 @@ A customized **Arch Linux + Hyprland** live ISO based on [bnasec-os](https://git
 ## Download
 
 Grab the latest ISO from the [**Releases**](https://github.com/f1999society-cmd/arch/releases) page:
-`bnasec-arch-1.1.0-amd64.iso` (~1.7 GB) + `sha256` checksum.
+
+**v1.1.1** ships as 2 parts (GitHub upload size limits) — reassemble before flashing:
+
+```bash
+cat bnasec-arch-1.1.1-amd64.iso.part-0 bnasec-arch-1.1.1-amd64.iso.part-1 > bnasec-arch-1.1.1-amd64.iso
+sha256sum -c bnasec-arch-1.1.1-amd64.iso.sha256
+# expected: 6f315a4686d0ee245f6ee77bd50e9e5d1130d1f6cd378c74145178ff0726cd3d
+```
+
+Windows: `copy /b bnasec-arch-1.1.1-amd64.iso.part-0+bnasec-arch-1.1.1-amd64.iso.part-1 bnasec-arch-1.1.1-amd64.iso`
 
 ## What's inside
 
 - **Arch Linux** live system, kernel `7.2.6-arch2-1`
-- **Hyprland 0.56.2** (Wayland) with the full low-specs rice: Catppuccin waybar, fastfetch, tuigreet greeter, autologin-ready user `bna` / password `bnasec`
+- **Hyprland 0.56.2** (Wayland) with the full low-specs rice: Catppuccin waybar (pill theme default, 15 themes via `Super+W`), fastfetch greeting, tuigreet greeter, user `bna` / password `bnasec`
+- **Working sudo** — `bna` is in `wheel` with sudoers enabled, all setuid binaries intact
 - **Automatic persistence**: on first boot the init scans the boot disk, appends a new partition, formats it `ext4` labelled `persistence` and mounts the whole root through an overlay — every file change (home, configs, installed packages) lands on the stick
 - **Boot menu** (BIOS: isolinux / UEFI: systemd-boot):
   - `Arch Hyprland (Noro rice) — persistent` ← default
   - `Arch Hyprland — RAM-only session (no persistence)`
   - `verbose boot (debug)` — serial console enabled
 
+## Screenshots (from QEMU verification runs)
+
+**Desktop — pill waybar (Arch launcher · date/clock · cpu/mem · workspace pills · network · power):**
+
+![desktop](v1.1.1-desktop-pill-bar.png)
+
+**fastfetch in kitty (auto-greeting):**
+
+![fastfetch](v1.1.1-fastfetch.png)
+
+**Persistence proof — file injected into the persistence partition between two boots, printed by the live session after reboot (root fs = overlay):**
+
+![persistence](v1.1.1-persistence-proof.png)
+
 ## Flash to USB
 
-> A **4 GB+** stick is enough (2 GB of free space becomes your persistence partition).
+> A **4 GB+** stick is enough (the rest becomes your persistence partition).
 
 **Linux / macOS (dd)**
 ```bash
 # replace sdX with your USB stick — this wipes it!
-sudo dd if=bnasec-arch-1.1.0-amd64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+sudo dd if=bnasec-arch-1.1.1-amd64.iso of=/dev/sdX bs=4M status=progress oflag=sync
 ```
 
 **Windows (Rufus)**
@@ -45,12 +69,37 @@ sudo dd if=bnasec-arch-1.1.0-amd64.iso of=/dev/sdX bs=4M status=progress oflag=s
 - To reset to a fresh system: re-flash the ISO (or delete the `persistence` partition).
 - To boot **without** persisting anything: pick `RAM-only session` in the boot menu.
 
-Verified in QEMU on both firmware paths: BIOS and UEFI boot → desktop login → file created → **reboot** → file still there + desktop intact.
+Verified in QEMU on the BIOS path: boot → desktop login → file created on the persistence store → **reboot** → file + home state still there (`root fs: overlay`).
+
+## Keybinds (defaults)
+
+| Keys | Action |
+|------|--------|
+| `Super+Return` | kitty terminal |
+| `Super+Space` | rofi launcher |
+| `Super+W` | waybar theme selector (15 themes) |
+| `Super+T` | Hyprland theme selector (glass/material/modern/noro/retro) |
+| `Super+R` | random wallpaper |
+| `Super+E` | thunar file manager |
+| `Super+B` | firefox |
+| `Super+Q` | close window |
+| `Super+Shift+E` | exit Hyprland |
+
+## Changelog
+
+### v1.1.1
+- Fixed: waybar default theme is now **pill** (v1.1.0 had a broken symlink → stock bar)
+- Fixed: **setuid bits restored** — sudo/su/mount/… worked for `bna` now (v1.1.0 sudo was broken)
+- Fixed: rofi theme symlinks
+- Verified: BIOS boot, desktop, persistence-across-reboot (QEMU evidence in this repo)
+
+### v1.1.0
+- Initial customized build: dotfiles applied, persistence init (`bnasec.persist=force`), hybrid BIOS+UEFI
 
 ## Verifying the download
 
 ```bash
-sha256sum -c bnasec-arch-1.1.0-amd64.iso.sha256
+sha256sum -c bnasec-arch-1.1.1-amd64.iso.sha256
 ```
 
 ## Building / customizing
