@@ -238,8 +238,9 @@ usb_wipe() {
 
 usb_persist() {
   echo "── Add a persistence partition (ext4, label: persistence) ──"
-  echo "  NOTE: the bnasec ISO creates this AUTOMATICALLY on first boot —"
-  echo "        you only need this for other distros or manual setups."
+  echo "  NOTE: the bnasec ISO normally creates this AUTOMATICALLY on first boot."
+  echo "        Use this if the auto-setup skipped (stick <2GiB free, or"
+  echo "        non-removable-flagged stick) or the partition was lost."
   DISK=$(pick_disk) || { pause; return; }
   confirm_disk "append a persistence partition to $DISK (keeps existing data)" || { pause; return; }
   need_pkgs parted e2fsprogs || { pause; return; }
@@ -249,7 +250,17 @@ usb_persist() {
   sudo parted -s "$DISK" mkpart primary ext4 "$((END+1))s" 100% \
     && sudo parted -s "$DISK" set $(lsblk -no PARTN "${DISK}3" 2>/dev/null || echo 3) ext4 on 2>/dev/null
   LAST="${DISK}$(lsblk -no PARTN "$DISK" | sort -n | tail -1)"
-  sudo mkfs.ext4 -L persistence -F "$LAST" && c_ok "persistence partition ready: $LAST"
+  sudo mkfs.ext4 -L persistence -F "$LAST" || { c_err "mkfs failed"; pause; return; }
+  # persistence.conf is REQUIRED — live-boot ignores the partition without it
+  if sudo mount "$LAST" /mnt 2>/dev/null; then
+    echo '/ union' | sudo tee /mnt/persistence.conf >/dev/null && sudo sync && sudo umount /mnt
+    c_ok "persistence.conf written — activates on next boot"
+  else
+    c_err "could not mount $LAST to write persistence.conf — run:"
+    echo "    sudo mount $LAST /mnt && echo '/ union' | sudo tee /mnt/persistence.conf && sudo umount /mnt"
+  fi
+  c_ok "persistence partition ready: $LAST"
+  echo "  Now REBOOT and pick: 'Arch Hyprland (Noro rice) — persistent'"
   pause
 }
 
