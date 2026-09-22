@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+# ════════════════════════════════════════════════════════════════
+#  bnasec-toolbox — one-shot customization + USB toolkit
+#  for the bnasec Arch / Hyprland persistent live ISO
+#
+#  Run:  bash bnasec-toolbox.sh
+#  Needs: user with sudo (bna / password bnasec on the live ISO)
+# ════════════════════════════════════════════════════════════════
+set -uo pipefail
+
+HCFG="$HOME/.config/hypr"
+CONFF="$HCFG/hyprland.conf"
+LUAF="$HCFG/hyprland.lua"      # active on Hyprland 0.55+ when present
+MARK_C="# >>> bnasec-toolbox"
+MARK_L="-- >>> bnasec-toolbox"
+
+c_ok()   { printf "\033[1;32m✔\033[0m %s\n" "$*"; }
+c_err()  { printf "\033[1;31m✘\033[0m %s\n" "$*"; }
+c_info() { printf "\033[1;36m➜\033[0m %s\n" "$*"; }
+c_warn() { printf "\033[1;33m⚠\033[0m %s\n" "$*"; }
+pause()  { read -rp "  [Enter] back to menu..." _; }
+
+need_pkgs() {
+  local missing=()
+  for p in "$@"; do
+    pacman -Qi "$p" &>/dev/null || missing+=("$p")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    c_info "installing: ${missing[*]}"
+    sudo pacman -S --needed --noconfirm "${missing[@]}" || { c_err "pacman failed (check network)"; return 1; }
+  fi
+  return 0
+}
+
+hypr_alive() { command -v hyprctl &>/dev/null && hyprctl reload &>/dev/null; }
+
+reload_hypr() {
+  if hypr_alive; then
+    c_ok "Hyprland config reloaded"
+  else
+    c_warn "could not reload now — press Super+Shift+C or log out/in later"
+  fi
+}
+
+append_block() { # $1=target file  $2=marker  $3=content
+  if grep -qF "$2" "$1" 2>/dev/null; then
+    c_info "already applied to $(basename "$1") — skipping"
+  else
+    printf "\n%s (applied %s)\n%s\n%s\n" "$2" "$(date +%F)" "$3" "${2/>>>/<<<}" >> "$1"
+    c_ok "written to $(basename "$1")"
+  fi
+}
+
+# ════════════════════════════════════════════════════════════════
+#  1) RICE UPGRADE — corners / blur / transparency
+# ════════════════════════════════════════════════════════════════
+rice_upgrade() {
+  echo "── Rounded corners + blur + transparency ──"
+  read -rp  "Corner radius [20]: " R;  R=${R:-20}
+  read -rp  "Window opacity 0.0-1.0 [0.90]: " O; O=${O:-0.90}
+
+  if [ -f "$LUAF" ]; then
+    append_block "$LUAF" "$MARK_L" "-- run after theme: override rounding/blur/opacity
+hl.config({
+    decoration = {
+        rounding = ${R},
+        active_opacity = ${O},
+        inactive_opacity = $(awk -v o="$O" 'BEGIN{printf "%.2f", o-0.05}'),
+        blur = { enabled = true, size = 8, passes = 3, vibrancy = 0.17 },
+    },
+})"
+  else
+    append_block "$CONFF" "$MARK_C" "decoration {
+    rounding = ${R}
+    active_opacity = ${O}
+    inactive_opacity = $(awk -v o="$O" 'BEGIN{printf "%.2f", o-0.05}')
+    blur {
+        enabled = true
+        size = 8
+        passes = 3
+        vibrancy = 0.17
+    }
+}"
+  fi
+  reload_hypr
+  echo "  Tip: Super+T can switch themes; this override wins over all of them."
+  pause
+}
+
+# ════════════════════════════════════════════════════════════════
+#  2) FIX SCREEN LOCK — install hyprlock + Super+L
+# ════════════════════════════════════════════════════════════════
+fix_lock() {
+  echo "── Screen lock (hyprlock + Super+L) ──"
+  need_pkgs hyprlock || { pause; return; }
+
+  if [ -f "$LUAF" ]; then
+    append_block "$LUAF" "$MARK_L" "-- lock screen on Super+L
+hl.bind(mod .. \" + L\", hl.dsp.exec_cmd(\"hyprlock\"))"
+  else
+    append_block "$CONFF" "$MARK_C" "bind = \$mod, L, exec, hyprlock"
+  fi
+
+  # runtime bind too (works even if reload is unavailable right now)
+  hyprctl keyword bind 'SUPER,L,exec,hyprlock' &>/dev/null && c_ok "Super+L active immediately"
+  reload_hypr
+  echo "  Unlock password on this live system: bnasec"
+  echo "  Test: press Super+L, then Esc to cancel."
+  pause
+}
+
+# ════════════════════════════════════════════════════════════════
+#  3) NIGHT LIGHT — hyprsunset + Super+N toggle
+# ════════════════════════════════════════════════════════════════
+night_light() {
+  echo "── Night light (hyprsunset + Super+N toggle) ──"
+  need_pkgs hyprsunset || { pause; return; }
+  read -rp "Temperature (2700 warm – 4500 mild) [3500]: " T; T=${T:-3500}
+
+  if [ -f "$LUAF" ]; then
+    append_block "$LUAF" "$MARK_L" "-- night light toggle on Super+N
+hl.bind(mod .. \" + N\", hl.dsp.exec_cmd(\"pkill -x hyprsunset || setsid -f hyprsunset -t ${T}\"))"
+  else
+    append_block "$CONFF" "$MARK_C" "bind = \$mod, N, exec, pkill -x hyprsunset || setsid -f hyprsunset -t ${T}"
+  fi
+
+  hyprctl keyword bind "SUPER,N,exec,pkill -x hyprsunset || setsid -f hyprsunset -t ${T}" &>/dev/null \
+    && c_ok "Super+N active immediately"
+  reload_hypr
+  echo "  Manual:  hyprsunset -t ${T}   (on)   |   hyprsunset -i   (reset)"
+  pause
+}
+
+# ════════════════════════════════════════════════════════════════
+#  4) LOUDER SOUND — raise PipeWire soft limit, keep after reboot
+# ════════════════════════════════════════════════════════════════
+louder() {
+  echo "── Louder sound ──"
+  command -v wpctl &>/dev/null || need_pkgs pipewire || { pause; return; }
+  read -rp "Max volume boost limit in % (130 = +30% over max, distorts) [150]: " L
+  L=${L:-150}; LIM=$(awk -v l="$L" 'BEGIN{printf "%.2f", l/100}')
+
+  wpctl set-volume -l "$LIM" @DEFAULT_AUDIO_SINK@ 100% && c_ok "limit raised to ${L}% — use volume keys to go past 100%"
+  wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
+
+  # re-apply on every boot via autostart
+  if [ -f "$LUAF" ]; then
+    append_block "$LUAF" "$MARK_L" "-- volume boost limit at startup
+hl.on(\"hyprland.start\", function()
+    hl.exec_cmd(\"wpctl set-volume -l ${LIM} @DEFAULT_AUDIO_SINK@ 100%\")
+end)"
+  else
+    append_block "$CONFF" "$MARK_C" "exec-once = wpctl set-volume -l ${LIM} @DEFAULT_AUDIO_SINK@ 100%"
+  fi
+  echo "  Extra punch (optional): sudo pacman -S easyeffects  → Effects → Loudness Equalizer"
+  pause
+}
+
+apply_all() { rice_upgrade; fix_lock; night_light; louder; }
+
+# ════════════════════════════════════════════════════════════════
+#  5) USB TOOLKIT
+# ════════════════════════════════════════════════════════════════
+pick_disk() { # echoes chosen /dev/sdX, refuses busy/boot disks
+  lsblk -do NAME,SIZE,TYPE,MODEL,MOUNTPOINTS
+  read -rp "Device (e.g. /dev/sdb): " DEV
+  case "$DEV" in
+    /dev/sd[a-z]|/dev/nvme[0-9]n[0-9]) ;;
+    *) c_err "not a whole disk: $DEV"; return 1 ;;
+  esac
+  [ -b "$DEV" ] || { c_err "no such block device"; return 1; }
+
+  local ROOTSRC BOOTSRC
+  ROOTSRC=$(findmnt -n -o SOURCE / 2>/dev/null)
+  BOOTSRC=$(findmnt -n -o SOURCE /run/bnasec/persist 2>/dev/null || findmnt -n -o SOURCE /run/archiso/bootmnt 2>/dev/null)
+  for S in "$ROOTSRC" "$BOOTSRC"; do
+    [ -z "$S" ] && continue
+    if lsblk -no PKNAME "$S" 2>/dev/null | grep -qx "$(basename "$DEV")"; then
+      c_err "REFUSED: $DEV is the system/boot disk — this would kill your session!"
+      return 1
+    fi
+  done
+  echo "$DEV"
+}
+
+confirm_disk() { # $1 = what we will do
+  c_warn "About to $1 — ALL DATA on $DISK WILL BE DESTROYED."
+  lsblk -do NAME,SIZE,MODEL "$DISK"
+  read -rp "Type YES to continue: " A
+  [ "$A" = "YES" ] || { c_info "aborted"; return 1; }
+}
+
+usb_list() { lsblk -do NAME,SIZE,TYPE,FSTYPE,LABEL,MODEL,MOUNTPOINTS; pause; }
+
+usb_write() {
+  DISK=$(pick_disk) || { pause; return; }
+  read -rp "Path to .iso file: " ISO
+  [ -f "$ISO" ] || { c_err "file not found: $ISO"; pause; return; }
+  confirm_disk "write '$ISO' to $DISK" || { pause; return; }
+  c_info "writing... (progress shown)"
+  sudo dd if="$ISO" of="$DISK" bs=4M status=progress conv=fdatasync && sudo sync \
+    && c_ok "done — USB is bootable" || c_err "write failed"
+  pause
+}
+
+usb_format() {
+  DISK=$(pick_disk) || { pause; return; }
+  echo "  1) FAT32 (universal, 4GB file limit)  2) exFAT (big files, Win+Mac)"
+  echo "  3) NTFS (Windows)                     4) ext4 (Linux only)"
+  read -rp "Filesystem [1-4]: " FS
+  read -rp "Volume label [USB]: " LBL; LBL=${LBL:-USB}
+  confirm_disk "format $DISK as $FS" || { pause; return; }
+  for P in "$DISK"?*; do sudo umount "$P" 2>/dev/null; done
+  sudo wipefs -a "$DISK" &>/dev/null
+  case "$FS" in
+    1) need_pkgs dosfstools    && sudo mkfs.vfat -F32 -n "$LBL" "$DISK" ;;
+    2) need_pkgs exfatprogs    && sudo mkfs.exfat -n "$LBL" "$DISK" ;;
+    3) need_pkgs ntfs-3g       && sudo mkfs.ntfs -L "$LBL" --fast "$DISK" ;;
+    4) need_pkgs e2fsprogs     && sudo mkfs.ext4 -L "$LBL" -F "$DISK" ;;
+    *) c_err "invalid choice"; pause; return ;;
+  esac && c_ok "formatted $DISK" || c_err "format failed"
+  pause
+}
+
+usb_wipe() {
+  DISK=$(pick_disk) || { pause; return; }
+  echo "  1) quick (signatures only, seconds)   2) full zero (slow, secure-ish)"
+  read -rp "Mode [1-2]: " M
+  confirm_disk "wipe $DISK" || { pause; return; }
+  if [ "$M" = "2" ]; then
+    sudo dd if=/dev/zero of="$DISK" bs=4M status=progress conv=fdatasync && c_ok "fully zeroed"
+  else
+    for P in "$DISK"?*; do sudo umount "$P" 2>/dev/null; done
+    sudo wipefs -a "$DISK" && c_ok "signatures wiped"
+  fi
+  pause
+}
+
+usb_persist() {
+  echo "── Add a persistence partition (ext4, label: persistence) ──"
+  echo "  NOTE: the bnasec ISO creates this AUTOMATICALLY on first boot —"
+  echo "        you only need this for other distros or manual setups."
+  DISK=$(pick_disk) || { pause; return; }
+  confirm_disk "append a persistence partition to $DISK (keeps existing data)" || { pause; return; }
+  need_pkgs parted e2fsprogs || { pause; return; }
+  sudo umount "${DISK}?*" 2>/dev/null
+  END=$(sudo parted -s "$DISK" unit s print | awk '/^ *[0-9]+/{e=$3} END{print e}' | tr -d 's')
+  [ -n "$END" ] || { c_err "could not read partition table"; pause; return; }
+  sudo parted -s "$DISK" mkpart primary ext4 "$((END+1))s" 100% \
+    && sudo parted -s "$DISK" set $(lsblk -no PARTN "${DISK}3" 2>/dev/null || echo 3) ext4 on 2>/dev/null
+  LAST="${DISK}$(lsblk -no PARTN "$DISK" | sort -n | tail -1)"
+  sudo mkfs.ext4 -L persistence -F "$LAST" && c_ok "persistence partition ready: $LAST"
+  pause
+}
+
+usb_menu() {
+  while true; do
+    echo; echo "── USB toolkit ──"
+    echo "  1) list drives          2) write ISO to USB"
+    echo "  3) format USB           4) wipe USB"
+    echo "  5) add persistence part 0) back"
+    read -rp "choice: " U
+    case "$U" in
+      1) usb_list ;; 2) usb_write ;; 3) usb_format ;; 4) usb_wipe ;; 5) usb_persist ;;
+      0) break ;; *) ;;
+    esac
+  done
+}
+
+# ════════════════════════════════════════════════════════════════
+while true; do
+  echo
+  echo "╔══════════════════════════════════════════╗"
+  echo "║        bnasec toolbox  v1.0              ║"
+  echo "╚══════════════════════════════════════════╝"
+  echo "  1) rounded corners + blur + transparency"
+  echo "  2) fix screen lock (Super+L)"
+  echo "  3) night light (Super+N toggle)"
+  echo "  4) louder sound"
+  echo "  5) apply ALL of the above (1-4)"
+  echo "  6) USB toolkit (write/format/wipe/persistence)"
+  echo "  0) exit"
+  read -rp "choice: " C
+  case "$C" in
+    1) rice_upgrade ;; 2) fix_lock ;; 3) night_light ;; 4) louder ;;
+    5) apply_all ;; 6) usb_menu ;; 0) exit 0 ;; *) ;;
+  esac
+done
