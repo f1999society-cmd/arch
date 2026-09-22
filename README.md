@@ -8,15 +8,16 @@ A customized **Arch Linux + Hyprland** live ISO based on [bnasec-os](https://git
 
 Grab the latest ISO from the [**Releases**](https://github.com/f1999society-cmd/arch/releases) page:
 
-**v1.1.1** ships as 2 parts (GitHub upload size limits) — reassemble before flashing:
+**v1.1.1** is a **single file** (~1.7 GB, no split parts):
+
+**Direct link:** [bnasec-arch-1.1.1-amd64.iso](https://github.com/f1999society-cmd/arch/releases/download/v1.1.1/bnasec-arch-1.1.1-amd64.iso)
+
+Optional integrity check after downloading:
 
 ```bash
-cat bnasec-arch-1.1.1-amd64.iso.part-0 bnasec-arch-1.1.1-amd64.iso.part-1 > bnasec-arch-1.1.1-amd64.iso
-sha256sum -c bnasec-arch-1.1.1-amd64.iso.sha256
+sha256sum bnasec-arch-1.1.1-amd64.iso
 # expected: 6f315a4686d0ee245f6ee77bd50e9e5d1130d1f6cd378c74145178ff0726cd3d
 ```
-
-Windows: `copy /b bnasec-arch-1.1.1-amd64.iso.part-0+bnasec-arch-1.1.1-amd64.iso.part-1 bnasec-arch-1.1.1-amd64.iso`
 
 ## What's inside
 
