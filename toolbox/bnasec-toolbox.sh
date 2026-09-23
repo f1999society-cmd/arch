@@ -11,8 +11,8 @@ set -uo pipefail
 HCFG="$HOME/.config/hypr"
 CONFF="$HCFG/hyprland.conf"
 LUAF="$HCFG/hyprland.lua"      # active on Hyprland 0.55+ when present
-MARK_C="# >>> bnasec-toolbox"
-MARK_L="-- >>> bnasec-toolbox"
+# per-feature markers — each option gets its own block so apply-all
+# writes ALL features and re-runs stay idempotent (shared-marker bug fixed)
 
 c_ok()   { printf "\033[1;32m✔\033[0m %s\n" "$*"; }
 c_err()  { printf "\033[1;31m✘\033[0m %s\n" "$*"; }
@@ -60,7 +60,7 @@ rice_upgrade() {
   read -rp  "Window opacity 0.0-1.0 [0.90]: " O; O=${O:-0.90}
 
   if [ -f "$LUAF" ]; then
-    append_block "$LUAF" "$MARK_L" "-- run after theme: override rounding/blur/opacity
+    append_block "$LUAF" "-- >>> bnasec-toolbox:rice" "-- run after theme: override rounding/blur/opacity
 hl.config({
     decoration = {
         rounding = ${R},
@@ -70,7 +70,7 @@ hl.config({
     },
 })"
   else
-    append_block "$CONFF" "$MARK_C" "decoration {
+    append_block "$CONFF" "# >>> bnasec-toolbox:rice" "decoration {
     rounding = ${R}
     active_opacity = ${O}
     inactive_opacity = $(awk -v o="$O" 'BEGIN{printf "%.2f", o-0.05}')
@@ -95,10 +95,10 @@ fix_lock() {
   need_pkgs hyprlock || { pause; return; }
 
   if [ -f "$LUAF" ]; then
-    append_block "$LUAF" "$MARK_L" "-- lock screen on Super+L
+    append_block "$LUAF" "-- >>> bnasec-toolbox:lock" "-- lock screen on Super+L
 hl.bind(mod .. \" + L\", hl.dsp.exec_cmd(\"hyprlock\"))"
   else
-    append_block "$CONFF" "$MARK_C" "bind = \$mod, L, exec, hyprlock"
+    append_block "$CONFF" "# >>> bnasec-toolbox:lock" "bind = \$mod, L, exec, hyprlock"
   fi
 
   # runtime bind too (works even if reload is unavailable right now)
@@ -118,10 +118,10 @@ night_light() {
   read -rp "Temperature (2700 warm – 4500 mild) [3500]: " T; T=${T:-3500}
 
   if [ -f "$LUAF" ]; then
-    append_block "$LUAF" "$MARK_L" "-- night light toggle on Super+N
+    append_block "$LUAF" "-- >>> bnasec-toolbox:nightlight" "-- night light toggle on Super+N
 hl.bind(mod .. \" + N\", hl.dsp.exec_cmd(\"pkill -x hyprsunset || setsid -f hyprsunset -t ${T}\"))"
   else
-    append_block "$CONFF" "$MARK_C" "bind = \$mod, N, exec, pkill -x hyprsunset || setsid -f hyprsunset -t ${T}"
+    append_block "$CONFF" "# >>> bnasec-toolbox:nightlight" "bind = \$mod, N, exec, pkill -x hyprsunset || setsid -f hyprsunset -t ${T}"
   fi
 
   hyprctl keyword bind "SUPER,N,exec,pkill -x hyprsunset || setsid -f hyprsunset -t ${T}" &>/dev/null \
@@ -145,21 +145,60 @@ louder() {
 
   # re-apply on every boot via autostart
   if [ -f "$LUAF" ]; then
-    append_block "$LUAF" "$MARK_L" "-- volume boost limit at startup
+    append_block "$LUAF" "-- >>> bnasec-toolbox:volume" "-- volume boost limit at startup
 hl.on(\"hyprland.start\", function()
     hl.exec_cmd(\"wpctl set-volume -l ${LIM} @DEFAULT_AUDIO_SINK@ 100%\")
 end)"
   else
-    append_block "$CONFF" "$MARK_C" "exec-once = wpctl set-volume -l ${LIM} @DEFAULT_AUDIO_SINK@ 100%"
+    append_block "$CONFF" "# >>> bnasec-toolbox:volume" "exec-once = wpctl set-volume -l ${LIM} @DEFAULT_AUDIO_SINK@ 100%"
   fi
   echo "  Extra punch (optional): sudo pacman -S easyeffects  → Effects → Loudness Equalizer"
   pause
 }
 
-apply_all() { rice_upgrade; fix_lock; night_light; louder; }
+# ════════════════════════════════════════════════════════════════
+#  5) WORKSPACE ANIMATION — slide / slidevert / slidefade / fade
+# ════════════════════════════════════════════════════════════════
+ws_anim() {
+  echo "── Workspace switch animation ──"
+  echo "  styles: slide | slidevert | slidefade [pct] | fade"
+  read -rp "Style [slide]: " S; S=${S:-slide}
+  case "$S" in
+    slide|slidevert|fade|slidefade|slidefade\ *) ;;
+    *) c_warn "unknown style '$S' — using slide"; S=slide ;;
+  esac
+  read -rp "Speed 1-10 (lower = faster) [6]: " V; V=${V:-6}
+  case "$V" in (*[!0-9]*|'') V=6 ;; esac
+  [ "$V" -ge 1 ] && [ "$V" -le 10 ] || V=6
+
+  if [ -f "$LUAF" ]; then
+    append_block "$LUAF" "-- >>> bnasec-toolbox:anim" "-- workspace switch animation
+hl.config({
+    animations = {
+        enabled = true,
+        animation = {
+            \"workspaces, 1, ${V}, default, ${S}\",
+        },
+    },
+})"
+  else
+    append_block "$CONFF" "# >>> bnasec-toolbox:anim" "animations {
+    enabled = true
+    animation = workspaces, 1, ${V}, default, ${S}
+}"
+  fi
+
+  hyprctl keyword animation "workspaces, 1, ${V}, default, ${S}" &>/dev/null \
+    && c_ok "applied live — switch workspaces to feel it"
+  reload_hypr
+  echo "  Tip: slide = horizontal sweep, slidevert = vertical, slidefade 30 = subtle mix."
+  pause
+}
+
+apply_all() { rice_upgrade; fix_lock; night_light; louder; ws_anim; }
 
 # ════════════════════════════════════════════════════════════════
-#  5) USB TOOLKIT
+#  6) USB TOOLKIT
 # ════════════════════════════════════════════════════════════════
 pick_disk() { # echoes chosen /dev/sdX, refuses busy/boot disks
   lsblk -do NAME,SIZE,TYPE,MODEL,MOUNTPOINTS
@@ -282,18 +321,19 @@ usb_menu() {
 while true; do
   echo
   echo "╔══════════════════════════════════════════╗"
-  echo "║        bnasec toolbox  v1.0              ║"
+  echo "║        bnasec toolbox  v1.1              ║"
   echo "╚══════════════════════════════════════════╝"
   echo "  1) rounded corners + blur + transparency"
   echo "  2) fix screen lock (Super+L)"
   echo "  3) night light (Super+N toggle)"
   echo "  4) louder sound"
-  echo "  5) apply ALL of the above (1-4)"
-  echo "  6) USB toolkit (write/format/wipe/persistence)"
+  echo "  5) workspace switch animation (slide)"
+  echo "  6) apply ALL of the above (1-5)"
+  echo "  7) USB toolkit (write/format/wipe/persistence)"
   echo "  0) exit"
   read -rp "choice: " C
   case "$C" in
     1) rice_upgrade ;; 2) fix_lock ;; 3) night_light ;; 4) louder ;;
-    5) apply_all ;; 6) usb_menu ;; 0) exit 0 ;; *) ;;
+    5) ws_anim ;; 6) apply_all ;; 7) usb_menu ;; 0) exit 0 ;; *) ;;
   esac
 done
