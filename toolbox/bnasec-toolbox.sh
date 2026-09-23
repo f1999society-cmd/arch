@@ -12,6 +12,12 @@
 #   - Volume keys remapped: F1 = MUTE, F2 = LOWER, F3 = RAISE (+ XF86 keys)
 #   - fix_lock now checks the login password (PAM) → no more "auth failed" on unlock
 #   - volume fix self-tests the sound pipeline so we know WHERE it breaks
+#  v1.4 changelog:
+#   - FIX purge_block: custom #-delim sed was invalid ("unexpected ','") so old
+#     blocks NEVER got cleaned and stale binds survived every re-run
+#   - NEW ensure_audio(): auto-starts pipewire+wireplumber if the audio stack is
+#     dead ("Could not connect to PipeWire" = the REAL reason keys did nothing)
+#   - volume bind verification no longer trusts `hyprctl binds` (new parser hides exec args)
 # ════════════════════════════════════════════════════════════════
 set -uo pipefail
 
@@ -87,8 +93,25 @@ append_block() { # $1=target file  $2=marker  $3=content
 }
 
 purge_block() { # $1=file  $2=feature tag — drop our old block so re-runs update values
+  # v1.4 FIX: custom #-delimiters broke the second address ("sed: unexpected ','")
+  # so stale blocks survived every re-run. Plain / delims — markers have no slashes.
   [ -f "$1" ] || return 0
-  sed -i "\\#bnasec-toolbox:$2#,#bnasec-toolbox:$2#d" "$1"
+  sed -i "/bnasec-toolbox:$2/,/bnasec-toolbox:$2/d" "$1"
+}
+
+ensure_audio() { # make sure the PipeWire user stack is actually alive
+  wpctl status &>/dev/null && return 0
+  c_warn "PipeWire is NOT running — this is why volume keys/OSD did nothing"
+  c_info "starting pipewire + wireplumber..."
+  systemctl --user enable --now pipewire pipewire-pulse wireplumber 2>/dev/null
+  sleep 1.5
+  if wpctl status &>/dev/null; then
+    c_ok "audio stack is up — keys and OSD have something to talk to now"
+    return 0
+  fi
+  c_err "audio stack still dead — run and paste me:"
+  echo "    systemctl --user status pipewire wireplumber pipewire-pulse --no-pager"
+  return 1
 }
 
 # ════════════════════════════════════════════════════════════════
@@ -252,6 +275,7 @@ hl.bind(\"SUPER + N\", hl.dsp.exec_cmd(\"pkill -x hyprsunset || setsid -f hyprsu
 louder() {
   echo "── Louder sound ──"
   command -v wpctl &>/dev/null || need_pkgs pipewire || { pause; return; }
+  ensure_audio || { pause; return; }
   read -rp "Max volume boost limit in % (130 = +30% over max, distorts) [150]: " L
   L=${L:-150}; LIM=$(awk -v l="$L" 'BEGIN{printf "%.2f", l/100}')
 
@@ -321,7 +345,7 @@ write_volsh() {
 # bnasec toolbox — volume key glue: swayosd OSD when its server is up,
 # raw wpctl fallback so the keys ALWAYS work. Boost capped at 150%.
 ACT="$1"
-pgrep -x swayosd-server >/dev/null || { setsid -f swayosd-server >/dev/null 2>&1; sleep 0.4; }
+pgrep -x swayosd-server >/dev/null || { setsid -f swayosd-server >/dev/null 2>&1; sleep 0.8; }
 if pgrep -x swayosd-server >/dev/null; then
   case "$ACT" in
     up)   swayosd-client --output-volume raise       && exit 0 ;;
@@ -343,6 +367,7 @@ vol_keys() {
   need_pkgs swayosd || { pause; return; }
   command -v wpctl &>/dev/null || { c_err "wpctl missing — install pipewire"; pause; return; }
   command -v swayosd-client &>/dev/null || { c_err "swayosd-client missing"; pause; return; }
+  ensure_audio || { pause; return; }
 
   write_volsh
   c_ok "glue script: $VOLSH (auto-starts the OSD server, wpctl fallback)"
@@ -369,23 +394,17 @@ exec-once = swayosd-server"
 
   reload_hypr
 
-  # v1.3: count what ACTUALLY registered — pinpoints bind problems instantly
-  local n; n=$(hyprctl binds 2>/dev/null | grep -c bnasec-vol.sh)
-  if [ "$n" -ge 6 ]; then
-    c_ok "$n binds registered — F1 mute / F2 lower / F3 raise are live"
-  elif [ "$n" -gt 0 ]; then
-    c_warn "only $n/6 binds registered — log out/in once for the rest"
-  else
-    local ok=0
-    hl_live "bindel = , F1, exec, $VOLSH mute"                   && ok=$((ok+1))
-    hl_live "bindel = , F2, exec, $VOLSH down"                   && ok=$((ok+1))
-    hl_live "bindel = , F3, exec, $VOLSH up"                     && ok=$((ok+1))
-    hl_live "bindel = , XF86AudioMute, exec, $VOLSH mute"        && ok=$((ok+1))
-    hl_live "bindel = , XF86AudioLowerVolume, exec, $VOLSH down" && ok=$((ok+1))
-    hl_live "bindel = , XF86AudioRaiseVolume, exec, $VOLSH up"   && ok=$((ok+1))
-    [ "$ok" -eq 6 ] && c_ok "volume keys live NOW (this session)" \
-                    || c_warn "$ok/6 live binds — check the reload errors above"
-  fi
+  # v1.4: always live-apply and count successes. (New-parser `hyprctl binds`
+  # hides exec args, so counting binds is unreliable — eval success is truth.)
+  local ok=0
+  hl_live "bindel = , F1, exec, $VOLSH mute"                   && ok=$((ok+1))
+  hl_live "bindel = , F2, exec, $VOLSH down"                   && ok=$((ok+1))
+  hl_live "bindel = , F3, exec, $VOLSH up"                     && ok=$((ok+1))
+  hl_live "bindel = , XF86AudioMute, exec, $VOLSH mute"        && ok=$((ok+1))
+  hl_live "bindel = , XF86AudioLowerVolume, exec, $VOLSH down" && ok=$((ok+1))
+  hl_live "bindel = , XF86AudioRaiseVolume, exec, $VOLSH up"   && ok=$((ok+1))
+  [ "$ok" -eq 6 ] && c_ok "volume keys live NOW — F1 mute / F2 lower / F3 raise" \
+                  || c_warn "$ok/6 live binds applied — log out/in once for the rest"
 
   # v1.3 self-test: prove the sound pipeline WITHOUT the keyboard. If this
   # passes but the keys do nothing, the KEY never reaches Hyprland (laptop Fn
@@ -608,7 +627,7 @@ usb_menu() {
 while true; do
   echo
   echo "╔══════════════════════════════════════════╗"
-  echo "║        bnasec toolbox  v1.3              ║"
+  echo "║        bnasec toolbox  v1.4              ║"
   echo "╚══════════════════════════════════════════╝"
   echo "  1) rounded corners + blur + transparency"
   echo "  2) fix screen lock (Super+L)"
