@@ -18,6 +18,12 @@
 #   - NEW ensure_audio(): auto-starts pipewire+wireplumber if the audio stack is
 #     dead ("Could not connect to PipeWire" = the REAL reason keys did nothing)
 #   - volume bind verification no longer trusts `hyprctl binds` (new parser hides exec args)
+#  v1.5 changelog:
+#   - FIX "mute works but can't unmute": a swayosd-server spawned while PipeWire
+#     was down is a deaf zombie — accepts keypresses, changes nothing. Glue v2 now
+#     VERIFIES every action via wpctl readback and redoes it via wpctl if needed.
+#   - ensure_audio() restarts the OSD server against the live audio stack
+#   - menu 5 self-test now does a full mute → unmute round-trip
 # ════════════════════════════════════════════════════════════════
 set -uo pipefail
 
@@ -99,6 +105,12 @@ purge_block() { # $1=file  $2=feature tag — drop our old block so re-runs upda
   sed -i "/bnasec-toolbox:$2/,/bnasec-toolbox:$2/d" "$1"
 }
 
+volsh_server_reset() { # a swayosd-server spawned while audio was down = deaf zombie
+  pkill -x swayosd-server 2>/dev/null; sleep 0.3
+  setsid -f swayosd-server >/dev/null 2>&1
+  c_ok "swayosd-server restarted against the live audio stack"
+}
+
 ensure_audio() { # make sure the PipeWire user stack is actually alive
   wpctl status &>/dev/null && return 0
   c_warn "PipeWire is NOT running — this is why volume keys/OSD did nothing"
@@ -107,6 +119,7 @@ ensure_audio() { # make sure the PipeWire user stack is actually alive
   sleep 1.5
   if wpctl status &>/dev/null; then
     c_ok "audio stack is up — keys and OSD have something to talk to now"
+    volsh_server_reset   # kill any deaf server spawned during the dead window
     return 0
   fi
   c_err "audio stack still dead — run and paste me:"
@@ -342,21 +355,22 @@ hl.config({
 write_volsh() {
   cat > "$VOLSH" <<'EOS'
 #!/bin/bash
-# bnasec toolbox — volume key glue: swayosd OSD when its server is up,
-# raw wpctl fallback so the keys ALWAYS work. Boost capped at 150%.
+# bnasec toolbox — volume glue v2: swayosd OSD tries first, but EVERY action is
+# verified with a wpctl readback; if the (possibly deaf/zombie) OSD server did
+# not actually change anything, wpctl redoes it. Unmute can never get lost.
 ACT="$1"
-pgrep -x swayosd-server >/dev/null || { setsid -f swayosd-server >/dev/null 2>&1; sleep 0.8; }
-if pgrep -x swayosd-server >/dev/null; then
-  case "$ACT" in
-    up)   swayosd-client --output-volume raise       && exit 0 ;;
-    down) swayosd-client --output-volume lower       && exit 0 ;;
-    mute) swayosd-client --output-volume mute-toggle && exit 0 ;;
-  esac
-fi
+SINK=@DEFAULT_AUDIO_SINK@
+cur() { wpctl get-volume "$SINK" 2>/dev/null; }
+
+pgrep -x swayosd-server >/dev/null || { setsid -f swayosd-server >/dev/null 2>&1; sleep 0.6; }
+
 case "$ACT" in
-  up)   wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+ ;;
-  down) wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%- ;;
-  mute) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+  up)   B=$(cur); swayosd-client --output-volume raise        2>/dev/null; sleep 0.4
+        [ "$(cur)" != "$B" ] || wpctl set-volume -l 1.5 "$SINK" 5%+ ;;
+  down) B=$(cur); swayosd-client --output-volume lower        2>/dev/null; sleep 0.4
+        [ "$(cur)" != "$B" ] || wpctl set-volume -l 1.5 "$SINK" 5%- ;;
+  mute) B=$(cur | grep -c MUTED); swayosd-client --output-volume mute-toggle 2>/dev/null; sleep 0.4
+        [ "$(cur | grep -c MUTED)" != "$B" ] || wpctl set-mute "$SINK" toggle ;;
 esac
 EOS
   chmod +x "$VOLSH"
@@ -414,6 +428,20 @@ exec-once = swayosd-server"
     c_ok "sound pipeline OK — keys dead = key not reaching Hyprland (Fn?)"
   else
     c_err "glue script failed — run: bash $VOLSH up   and paste me the error"
+  fi
+
+  # v1.5: prove the EXACT thing that bit you — mute must always toggle back
+  c_info "self-test 2: mute → unmute round-trip (audio blips twice)..."
+  local M0 M1 M2
+  M0=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -c MUTED)
+  bash "$VOLSH" mute; sleep 0.6
+  M1=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -c MUTED)
+  bash "$VOLSH" mute; sleep 0.6
+  M2=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -c MUTED)
+  if [ "$M0" != "$M1" ] && [ "$M1" != "$M2" ]; then
+    c_ok "mute AND unmute verified — F1 always toggles back now"
+  else
+    c_warn "mute round-trip failed (M0=$M0 M1=$M1 M2=$M2) — paste me: wpctl get-volume @DEFAULT_AUDIO_SINK@"
   fi
   echo "  First OSD after a reboot may lag ~1s while the server auto-starts."
   echo "  (The 'LibInput Backend isn't available' warning is harmless — caps-lock OSD only.)"
@@ -627,7 +655,7 @@ usb_menu() {
 while true; do
   echo
   echo "╔══════════════════════════════════════════╗"
-  echo "║        bnasec toolbox  v1.4              ║"
+  echo "║        bnasec toolbox  v1.5              ║"
   echo "╚══════════════════════════════════════════╝"
   echo "  1) rounded corners + blur + transparency"
   echo "  2) fix screen lock (Super+L)"
