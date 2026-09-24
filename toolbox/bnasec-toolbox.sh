@@ -617,6 +617,84 @@ space_rescue() {
 }
 
 # ════════════════════════════════════════════════════════════════
+#  9) SYSTEM DOCTOR — keyring rebuild, package rot audit, spotify
+#     repair, fs health. Born from the great corruption investigation.
+# ════════════════════════════════════════════════════════════════
+fs_health() { # dmesg + df sanity — returns 1 if the persist fs looks sick
+  echo "── fs health check ──"
+  sudo df -h  /run/persist 2>/dev/null | tail -1 | sed 's/^/    /'
+  sudo df -i  /run/persist 2>/dev/null | tail -1 | sed 's/^/    /'
+  local HITS
+  HITS=$(sudo dmesg 2>/dev/null | grep -cE "error 28|I/O error|EXT4-fs error|Delayed block allocation failed")
+  if [ "$HITS" -gt 0 ]; then
+    c_err "$HITS filesystem-error hits in dmesg — the persist ext4 is SICK:"
+    sudo dmesg 2>/dev/null | grep -E "error 28|I/O error|EXT4-fs error|Delayed block allocation failed" | tail -6 | sed 's/^/    /'
+    echo "    'error 28' (No space left) with millions of free blocks = corrupted"
+    echo "    allocator metadata. Repair: reboot, pick the NON-persistent boot"
+    echo "    entry, then:   sudo fsck -fy <the persist device, e.g. /dev/sda3>"
+    echo "    Reboot back into persistent. If 'error 28' returns after fsck, the"
+    echo "    stick itself is lying about writes -> replace it (brand-name stick)."
+    return 1
+  fi
+  c_ok "no fs errors in dmesg this boot"
+  return 0
+}
+
+keyring_fix() { # rebuild pacman trust store + pull fresh sync dbs
+  echo "── pacman keyring rebuild + fresh sync dbs ──"
+  sudo rm -rf /etc/pacman.d/gnupg
+  sudo pacman-key --init && sudo pacman-key --populate archlinux
+  sudo rm -rf /var/lib/pacman/sync   # sync dbs are re-downloadable cache; corrupt copies die here
+  if sudo pacman -Sy archlinux-keyring; then
+    c_ok "keyring rebuilt + updated. Now finish with:  sudo pacman -Su"
+  else
+    c_warn "-Sy failed — paste the output"
+  fi
+}
+
+rot_audit() { # checksum every file of every installed package
+  echo "── package rot audit (checksums all files, takes minutes — wait) ──"
+  echo "  ('Permissions mismatch' = archiso overlay noise, filtered out)"
+  local OUT
+  OUT=$(sudo pacman -Qkk 2>&1 | grep -v "Permissions mismatch" | grep -iE "mismatch|missing|error|corrupt")
+  if [ -n "$OUT" ]; then
+    c_warn "damaged package files found:"
+    echo "$OUT" | head -30 | sed 's/^/    /'
+    echo "    repair any of these with:  sudo pacman -S <pkgname>"
+  else
+    c_ok "every installed file passes its checksum — no rot"
+  fi
+}
+
+spotify_repair() { # the segfaulting client lives in ~/.local/share/spotify-launcher
+  echo "── spotify repair ──"
+  local RUSER RHOME
+  RUSER=${SUDO_USER:-$USER}
+  RHOME=$(getent passwd "$RUSER" 2>/dev/null | cut -d: -f6); RHOME=${RHOME:-$HOME}
+  rm -rf "$RHOME/.local/share/spotify-launcher" "$RHOME/.config/spotify" \
+         "$RHOME/.cache/spotify" 2>/dev/null
+  c_ok "corrupted client copy + profile nuked — next launch re-downloads ~150MB"
+  echo "  Now run:  spotify-launcher"
+  echo "  If a FRESH client still segfaults:  pacman -Qkk spotify-launcher  && paste"
+}
+
+system_doctor() {
+  fs_health
+  echo
+  keyring_fix
+  echo
+  rot_audit
+  echo
+  spotify_repair
+  echo
+  echo "  Recommended order if fs_health found errors:"
+  echo "   1. reboot -> NON-persistent boot entry -> sudo fsck -fy <persist dev>"
+  echo "   2. reboot back into persistent"
+  echo "   3. run this doctor again, then: sudo pacman -Su"
+  pause
+}
+
+# ════════════════════════════════════════════════════════════════
 #  6) USB TOOLKIT
 # ════════════════════════════════════════════════════════════════
 pick_disk() { # echoes chosen /dev/sdX, refuses busy/boot disks
@@ -740,7 +818,7 @@ usb_menu() {
 while true; do
   echo
   echo "╔══════════════════════════════════════════╗"
-  echo "║        bnasec toolbox  v1.6              ║"
+  echo "║        bnasec toolbox  v1.7              ║"
   echo "╚══════════════════════════════════════════╝"
   echo "  1) rounded corners + blur + transparency"
   echo "  2) fix screen lock (Super+L)"
@@ -752,11 +830,12 @@ while true; do
   echo "  8) USB toolkit (write/format/wipe/persistence)"
   echo "  9) USB anti-lag pack (fix USB lag/stutter)"
   echo " 10) space rescue (No space left on device fix)"
+  echo " 11) system doctor (keyring + rot audit + spotify + fs health)"
   echo "  0) exit"
   read -rp "choice: " C
   case "$C" in
     1) rice_upgrade ;; 2) fix_lock ;; 3) night_light ;; 4) louder ;;
     5) vol_keys ;; 6) ws_anim ;; 7) apply_all ;; 8) usb_menu ;;
-    9) usb_speed_fix ;; 10) space_rescue ;; 0) exit 0 ;; *) ;;
+    9) usb_speed_fix ;; 10) space_rescue ;; 11) system_doctor ;; 0) exit 0 ;; *) ;;
   esac
 done
