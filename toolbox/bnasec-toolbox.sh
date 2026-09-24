@@ -532,6 +532,91 @@ usb_speed_fix() {
 apply_all() { rice_upgrade; fix_lock; night_light; louder; ws_anim; vol_keys; usb_speed_fix; }
 
 # ════════════════════════════════════════════════════════════════
+#  8) PERSIST SPACE RESCUE — "No space left on device" unblocker.
+#     Usual suspects on the bnasec live stick: pacman pkg cache that
+#     ate the partition (half-downloaded pkgs = corrupted cache),
+#     old on-disk journals, and a fat ~/.cache shadowed by its tmpfs.
+# ════════════════════════════════════════════════════════════════
+space_rescue() {
+  echo "── persist space rescue (disk-full fix) ──"
+  local MP DEV RUSER RHOME SZ
+  MP=/run/persist; findmnt -n "$MP" >/dev/null 2>&1 || MP=/run/bnasec/persist
+  DEV=$(findmnt -n -o SOURCE "$MP" 2>/dev/null)
+  findmnt -n "$MP" >/dev/null 2>&1 && \
+    echo "  persist before: $(df -h "$MP" | awk 'NR==2{print $3" of "$2"  ("$5") used"}')"
+
+  # 1) drop ext4's 5% root reserve FIRST (~100MB on a 2G stick) so the
+  #    deletes below can never hit "No space left" themselves
+  if [ -n "$DEV" ] && command -v tune2fs &>/dev/null && tune2fs -m 0 "$DEV" &>/dev/null; then
+    c_ok "1/5 ext4 root reserve -> 0 on $DEV (reclaimed ~5%)"
+  else
+    c_info "1/5 reserve reclaim skipped (${DEV:-no persist mount found})"
+  fi
+
+  # 2) pacman pkg cache — every byte expendable. Half-downloaded pkgs from a
+  #    disk-full interrupt are the usual suspect ("missing package metadata").
+  #    Merged view first, then straight at the upper for whatever the full-fs
+  #    whiteout dance blocked.
+  SZ=$(du -sm /var/cache/pacman/pkg 2>/dev/null | awk '{print $1}'); SZ=${SZ:-0}
+  rm -rf /var/cache/pacman/pkg/* /run/persist/upper/var/cache/pacman/pkg/* 2>/dev/null
+  rm -rf /var/lib/pacman/sync/download-* 2>/dev/null
+  rm -f  /var/lib/pacman/db.lck 2>/dev/null
+  c_ok "2/5 pkg cache cleared (${SZ}M, corrupted pkgs included) + sync temps + db.lck"
+
+  # 3) old on-disk journals — logging is RAM-only since the anti-lag pack,
+  #    so anything sitting in /var/log/journal is a leftover
+  SZ=$(du -sm /var/log/journal 2>/dev/null | awk '{print $1}'); SZ=${SZ:-0}
+  if [ "$SZ" -gt 0 ]; then
+    rm -rf /var/log/journal 2>/dev/null
+    c_ok "3/5 old on-disk journals removed (${SZ}M) — new logs stay in RAM"
+  else
+    c_info "3/5 no on-disk journals — skipping"
+  fi
+
+  # 4) shadowed ~/.cache — if the cache was fat BEFORE the tmpfs went over
+  #    it, that copy is invisible but still parked on the stick. Nuke it.
+  RUSER=${SUDO_USER:-$USER}
+  RHOME=$(getent passwd "$RUSER" 2>/dev/null | cut -d: -f6); RHOME=${RHOME:-$HOME}
+  if findmnt -n "$RHOME/.cache" >/dev/null 2>&1 && [ -d "/run/persist/upper$RHOME/.cache" ]; then
+    SZ=$(du -sm "/run/persist/upper$RHOME/.cache" 2>/dev/null | awk '{print $1}'); SZ=${SZ:-0}
+    if [ "$SZ" -gt 16 ]; then
+      rm -rf "/run/persist/upper$RHOME/.cache"/* 2>/dev/null
+      c_ok "4/5 cleared ${SZ}M of shadowed ~/.cache hiding under the tmpfs"
+    else
+      c_info "4/5 shadowed ~/.cache is tiny (${SZ}M) — leaving it"
+    fi
+  else
+    c_info "4/5 no shadowed ~/.cache — skipping"
+  fi
+
+  # 5) pkg cache -> RAM from now on: package downloads NEVER eat the stick
+  if grep -q "bnasec-toolbox:pkgcache" /etc/fstab 2>/dev/null \
+     || grep -qE "^tmpfs +/var/cache/pacman/pkg " /etc/fstab 2>/dev/null; then
+    c_info "5/5 pkg cache already RAM-backed — skipping"
+  else
+    printf '%s\n' "" "# >>> bnasec-toolbox:pkgcache >>>" \
+      "tmpfs /var/cache/pacman/pkg tmpfs rw,nosuid,nodev,size=768M,mode=0755 0 0" \
+      "# <<< bnasec-toolbox:pkgcache <<<" | sudo tee -a /etc/fstab >/dev/null
+    sudo mkdir -p /var/cache/pacman/pkg
+    sudo mount /var/cache/pacman/pkg 2>/dev/null || sudo mount -a 2>/dev/null
+    findmnt -n /var/cache/pacman/pkg >/dev/null 2>&1 \
+      && c_ok "5/5 pkg cache is RAM-backed now (cache auto-vanishes each reboot)" \
+      || c_warn "5/5 fstab written — cache becomes RAM-backed on next reboot"
+  fi
+
+  echo
+  findmnt -n "$MP" >/dev/null 2>&1 && \
+    echo "  persist after:  $(df -h "$MP" | awk 'NR==2{print $3" of "$2"  ("$5") used"}')"
+  echo "  biggest things still on the persist:"
+  du -xh --max-depth=2 /run/persist/upper 2>/dev/null | sort -hr | head -8 | sed 's/^/    /'
+  echo
+  echo "  If pacman was mid-update when the disk filled, finish it now:"
+  echo "    sudo pacman -Syu"
+  echo "  (fresh downloads land in RAM cache, not on the stick)"
+  pause
+}
+
+# ════════════════════════════════════════════════════════════════
 #  6) USB TOOLKIT
 # ════════════════════════════════════════════════════════════════
 pick_disk() { # echoes chosen /dev/sdX, refuses busy/boot disks
@@ -655,7 +740,7 @@ usb_menu() {
 while true; do
   echo
   echo "╔══════════════════════════════════════════╗"
-  echo "║        bnasec toolbox  v1.5              ║"
+  echo "║        bnasec toolbox  v1.6              ║"
   echo "╚══════════════════════════════════════════╝"
   echo "  1) rounded corners + blur + transparency"
   echo "  2) fix screen lock (Super+L)"
@@ -666,11 +751,12 @@ while true; do
   echo "  7) apply ALL of the above (1-6 + USB anti-lag)"
   echo "  8) USB toolkit (write/format/wipe/persistence)"
   echo "  9) USB anti-lag pack (fix USB lag/stutter)"
+  echo " 10) space rescue (No space left on device fix)"
   echo "  0) exit"
   read -rp "choice: " C
   case "$C" in
     1) rice_upgrade ;; 2) fix_lock ;; 3) night_light ;; 4) louder ;;
     5) vol_keys ;; 6) ws_anim ;; 7) apply_all ;; 8) usb_menu ;;
-    9) usb_speed_fix ;; 0) exit 0 ;; *) ;;
+    9) usb_speed_fix ;; 10) space_rescue ;; 0) exit 0 ;; *) ;;
   esac
 done
