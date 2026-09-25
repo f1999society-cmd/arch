@@ -2,13 +2,26 @@
 # shellcheck disable=SC2034
 
 build() {
-    # bnasec persistence guarantee binaries (used by the archiso_bnasec hook)
+    # upstream archiso binaries (this hook is a self-contained fork of the
+    # upstream archiso hook — HOOKS does not include the stock archiso hook).
+    # WITHOUT add_binary losetup the initramfs falls back to busybox's applet,
+    # which rejects GNU long options: "losetup: unrecognized option '--find'"
+    # (boot test T1, run 36181737176) — and --show/--read-only too.
+    add_module "loop"
+    add_module "dm-snapshot"
+    add_module "overlay"
+    add_binary /usr/bin/losetup
+    add_binary /usr/bin/blockdev
+    add_binary /usr/bin/dmsetup
+    add_binary /usr/bin/truncate
+    add_binary /usr/bin/openssl
+    add_binary /usr/bin/lsblk
+    # bnasec persistence guarantee binaries (persist auto-create + fsck + reserve)
     add_binary /usr/bin/e2fsck
     add_binary /usr/bin/mkfs.ext4
     add_binary /usr/bin/tune2fs
     add_binary /usr/bin/sfdisk
     add_binary /usr/bin/partx
-    add_binary /usr/bin/lsblk
     add_binary /usr/bin/awk
     add_binary /usr/bin/sleep
 
