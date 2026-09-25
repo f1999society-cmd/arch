@@ -39,6 +39,10 @@ for pkg in chaotic-keyring chaotic-mirrorlist; do
   curl -fsLO "https://builds.garudalinux.org/repos/chaotic-aur/x86_64/$f"
   pacman -U --noconfirm "$f" >/dev/null
 done
+# container keyrings are not initialized/populated — chaotic packages would fail
+# signature checks ("unknown trust") without this
+pacman-key --init >/dev/null 2>&1 || true
+pacman-key --populate archlinux chaotic
 grep -q '^\[chaotic-aur\]' /etc/pacman.conf || cat >> /etc/pacman.conf <<'EOF'
 
 [chaotic-aur]
