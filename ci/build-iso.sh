@@ -340,9 +340,16 @@ KEEP_BINS=(pacman pacstrap arch-chroot mkarchiso mksquashfs unsquashfs xorriso \
 for b in "${KEEP_BINS[@]}"; do
   p=$(command -v "$b" 2>/dev/null) || continue
   pacman -Qoq "$p" >> /tmp/keep-pkgs.txt 2>/dev/null || true
-  for lib in $(ldd "$p" 2>/dev/null | awk '$3 ~ /^\// {print $3}'); do
+  # ldd prints RUNPATH-resolved libs as '/path (0x..)' — no '=>' — so scan every
+  # whitespace-separated token for absolute .so paths (the old $3-only parse
+  # missed libstdc++ and the purge removed gcc-libs from under pacman+node)
+  for lib in $(ldd "$p" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i ~ /^\// && $i ~ /\.so/) print $i}'); do
     pacman -Qoq "$lib" >> /tmp/keep-pkgs.txt 2>/dev/null || true
   done
+done
+# explicit probes for the libs everything else depends on
+for lib in /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /usr/lib/libseccomp.so.2; do
+  [ -e "$lib" ] && pacman -Qoq "$lib" >> /tmp/keep-pkgs.txt 2>/dev/null || true
 done
 # static floor: keyrings/mirrors/CAs for the post-purge pacman -S, base metadata
 cat >> /tmp/keep-pkgs.txt <<'EOF'
@@ -383,6 +390,9 @@ if ! command -v mkarchiso >/dev/null 2>&1 || ! command -v find >/dev/null 2>&1 \
    || ! command -v mmd >/dev/null 2>&1; then
   echo "!! essential tools missing after purge:"; tail -10 /tmp/purge.log; exit 1
 fi
+# diagnostics for the purge side-effects
+ls -l /usr/lib/libstdc++.so.6 >/dev/null 2>&1 && echo "libstdc++ present" || echo "!! libstdc++.so.6 MISSING after purge"
+ls -l /usr/lib/libseccomp.so.2 >/dev/null 2>&1 && echo "libseccomp present" || echo "!! libseccomp.so.2 MISSING after purge"
 echo "pruned. container: $(pacman -Qq 2>/dev/null | wc -l) packages, free: $(df -h / | awk 'NR==2{print $4}')"
 
 # ------------------------------------------------------------- 6. mkarchiso
