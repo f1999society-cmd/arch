@@ -311,6 +311,13 @@ echo "locale data: $([ -d "$A/usr/lib/locale" ] && du -sh "$A/usr/lib/locale" | 
 
 # build metadata
 mkdir -p "$A/usr/share/bnasec"
+# the toolbox is the product's spine — verify it is staged BEFORE spending 15
+# minutes of mkarchiso, and print the hash visibly (BUILD-INFO alone hides a
+# failed command substitution inside the heredoc)
+[ -f "$A/usr/local/bin/bnasec-toolbox" ] \
+  || { echo "!! bnasec-toolbox missing from profile at collect time:"; ls -laR "$A/usr/local/bin/" 2>&1; exit 1; }
+chmod 755 "$A/usr/local/bin/bnasec-toolbox"
+echo "toolbox staged: $(du -h "$A/usr/local/bin/bnasec-toolbox" | cut -f1) sha12=$(sha256sum "$A/usr/local/bin/bnasec-toolbox" | cut -c1-12)"
 cat > "$A/usr/share/bnasec/BUILD-INFO" <<EOF
 iso: bnasec-arch-1.2.0
 built: $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -470,6 +477,7 @@ rm -rf /var/cache/pacman/pkg/*
 rm -rf /etc/pacman.d/gnupg
 pacman-key --init 2>&1 | tail -2 || { echo "!! pacman-key --init failed:"; tail -5 /tmp/purge.log; exit 1; }
 pacman-key --populate archlinux chaotic 2>&1 | tail -3 || { echo "!! pacman-key --populate failed"; exit 1; }
+echo "profile usr/local/bin: $(ls -la "$PROFILE_DIR/airootfs/usr/local/bin" 2>&1 | tail -n +2 | tr '\n' '|' )"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(date +%s)}"
 # xorriso's free-space check runs against the filesystem holding the ISO file —
 # the runner SSD has only ~2.2GB free at this point while the ISO is 2.6GB
@@ -529,16 +537,21 @@ rm -rf "$CHECK"; mkdir -p "$CHECK"
 unsquashfs -f -d "$CHECK" "$SFS" \
   'home/bna/.config/hypr' 'usr/local/bin/bnasec-toolbox' \
   'usr/share/sddm/themes' 'etc/sddm.conf.d' 'etc/pacman.conf' \
-  'usr/lib/initcpio/hooks/archiso_bnasec' 'usr/bin/sudo' \
+  'usr/lib/initcpio/hooks/archiso_bnasec' 'usr/bin/sudo' 'usr/bin/su' \
+  'usr/bin/mount' 'usr/bin/passwd' 'usr/share/bnasec' \
   > /tmp/unsquashfs.log 2>&1 || { tail -20 /tmp/unsquashfs.log; exit 1; }
 FAIL=0
 [ -d "$CHECK/home/bna/.config/hypr" ] && echo "PASS hypr dots baked ($(find "$CHECK/home/bna/.config/hypr" -type f | wc -l) files)" || { echo "FAIL hypr dots missing"; FAIL=1; }
-[ -x "$CHECK/usr/local/bin/bnasec-toolbox" ] && echo "PASS toolbox baked" || { echo "FAIL toolbox missing"; FAIL=1; }
+[ -x "$CHECK/usr/local/bin/bnasec-toolbox" ] && echo "PASS toolbox baked" || { echo "FAIL toolbox missing/not-exec — context:"; ls -la "$CHECK/usr/local/bin/" 2>&1; cat "$CHECK/usr/share/bnasec/BUILD-INFO" 2>&1; unsquashfs -ll "$SFS" 2>/dev/null | grep -E 'usr/local|BUILD-INFO' | head -10; FAIL=1; }
 [ -d "$CHECK/usr/share/sddm/themes/Corners" ] && echo "PASS sddm theme baked" || { echo "FAIL sddm theme missing"; FAIL=1; }
 grep -q chaotic-aur "$CHECK/etc/pacman.conf" && echo "PASS chaotic in live pacman.conf" || { echo "FAIL chaotic missing from pacman.conf"; FAIL=1; }
 [ -f "$CHECK/usr/lib/initcpio/hooks/archiso_bnasec" ] && echo "PASS persist hook baked" || { echo "FAIL persist hook missing"; FAIL=1; }
-SUID=$(find "$CHECK/usr" -perm -4000 -type f 2>/dev/null | wc -l)
-[ "$SUID" -ge 15 ] && echo "PASS setuid binaries intact ($SUID)" || { echo "FAIL setuid count low ($SUID)"; FAIL=1; }
+# setuid: count only the binaries we deliberately extracted — the old find over
+# "$CHECK/usr" saw just the extracted subset, so the threshold read as 1 and
+# false-failed. Arch ships sudo/su/mount/passwd as 4755.
+SUID=$(find "$CHECK/usr/bin" -maxdepth 1 -perm -4000 -type f 2>/dev/null | wc -l)
+echo "setuid binaries found: $(find "$CHECK/usr/bin" -maxdepth 1 -perm -4000 -type f 2>/dev/null | tr '\n' ' ')"
+[ "$SUID" -ge 4 ] && echo "PASS setuid binaries intact ($SUID)" || { echo "FAIL setuid count low ($SUID)"; FAIL=1; }
 [ "$FAIL" = 0 ] || { echo "ASSERTIONS FAILED"; exit 1; }
 
 # free the work tree BEFORE moving the 2.6GB ISO out of tmpfs — the sfs + tree
