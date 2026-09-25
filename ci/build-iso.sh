@@ -243,13 +243,28 @@ du -sh /home/bna/.cache 2>/dev/null || true
 rm -rf /home/bna/.cache
 cp -a /home/bna/. "$A/home/bna/"
 
-# display manager theme written by install_pst.sh
-cp -a /etc/sddm.conf.d/. "$A/etc/sddm.conf.d/" 2>/dev/null || true
-if compgen -G '/usr/share/sddm/themes/*' >/dev/null; then
-  cp -a /usr/share/sddm/themes/. "$A/usr/share/sddm/themes/"
-fi
+# display manager theme written by install_pst.sh + Hyde theme archives.
+# copy_unowned: copy SRC under DST but SKIP any path owned by the named packages —
+# mkarchiso pacstraps those packages into the airootfs afterwards, and pre-baked
+# package-owned files make pacman abort with "exists in filesystem"
+# (sddm's bundled maya theme was exactly that, run 36136026081).
+copy_unowned() {
+  local src="$1" dst="$2"; shift 2
+  local owned="/tmp/owned.$$.txt"
+  pacman -Qql "$@" 2>/dev/null | sort -u > "$owned"
+  ( cd "$src" && find . -mindepth 1 -printf '%P\n' ) | while IFS= read -r rel; do
+    local abs="${src%/}/$rel"
+    abs="${abs%/}"
+    if grep -qxF "$abs" "$owned"; then continue; fi
+    mkdir -p "$dst/$(dirname "$rel")"
+    cp -a "$abs" "$dst/$rel"
+  done
+  rm -f "$owned"
+}
+copy_unowned /etc/sddm.conf.d       "$A/etc/sddm.conf.d"       sddm
+copy_unowned /usr/share/sddm/themes "$A/usr/share/sddm/themes" sddm
 if [ -d /usr/share/sddm/faces ]; then
-  cp -a /usr/share/sddm/faces "$A/usr/share/sddm/faces"
+  copy_unowned /usr/share/sddm/faces "$A/usr/share/sddm/faces" sddm
 fi
 
 # system-wide fonts/cursors Hyde dropped into /usr/local/share
@@ -266,12 +281,9 @@ mkdir -p "$A/etc/pacman.d"
 sed '/^\[bnasec-local\]/,+3d' "$PROFILE_DIR/pacman.conf" > "$A/etc/pacman.conf"
 cp /etc/pacman.d/chaotic-mirrorlist "$A/etc/pacman.d/chaotic-mirrorlist"
 
-# locale data (locale-gen ran in the container). Depending on the glibc build the
-# compiled locales live either in a monolithic locale-archive or in per-locale
-# directories under /usr/lib/locale (current Arch containers: directories, no
-# archive) — copy whatever is there.
-mkdir -p "$A/usr/lib/locale"
-cp -a /usr/lib/locale/. "$A/usr/lib/locale/"
+# locale data (locale-gen ran in the container). Skip glibc-owned dirs (C.utf8 is
+# shipped by the glibc package — pacstrap would hit the same "exists in filesystem").
+copy_unowned /usr/lib/locale "$A/usr/lib/locale" glibc
 echo "locale data: $(du -sh "$A/usr/lib/locale" | cut -f1)"
 
 # build metadata
