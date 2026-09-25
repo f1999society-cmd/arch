@@ -373,11 +373,20 @@ echo "keep-closure: $(sort -u /tmp/keep-pkgs.txt | grep -cv '^$') packages"
 # the container's shared-library state (the purge keeps breaking dynamic pacman —
 # libseccomp run 36146550749, libstdc++ run 36149510273 — despite the closure).
 pacman -S --noconfirm --needed pacman-static >> /tmp/purge.log 2>&1 || echo "WARN: pacman-static unavailable, falling back to dynamic pacman"
+# rescue the libs the runner's node + pacman cannot live without — whatever the
+# purge removes gets physically restored right after, then the reinstall below
+# repairs the DB/files consistency
+RESCUE=/tmp/librescue; rm -rf "$RESCUE"; mkdir -p "$RESCUE"
+cp -a /usr/lib/libstdc++.so.6* /usr/lib/libgcc_s.so.1* /usr/lib/libseccomp.so.2* "$RESCUE/" 2>/dev/null || true
+ls -la "$RESCUE" | tail -n +2
 PURGE=$(pacman -Qq 2>/dev/null | grep -vxE "$KEEP" || true)
 if [ -n "$PURGE" ]; then
   # shellcheck disable=SC2086
   pacman -Rdd --noconfirm $PURGE > /tmp/purge.log 2>&1 || { echo "purge had failures (tail):"; tail -5 /tmp/purge.log; }
+  echo "evidence — gcc-libs removed: $(grep -c 'removing gcc-libs' /tmp/purge.log || true), pacman removed: $(grep -c 'removing pacman$' /tmp/purge.log || true)"
 fi
+cp -a "$RESCUE/." /usr/lib/ 2>/dev/null || true
+/sbin/ldconfig 2>/dev/null || true
 # post-purge package ops go through pacman-static (immune to removed libraries)
 PAC=pacman-static
 command -v pacman-static >/dev/null 2>&1 || { PAC=pacman; command -v pacman >/dev/null 2>&1 || { echo "!! no pacman at all — cannot recover"; exit 1; }; }
