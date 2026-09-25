@@ -135,7 +135,9 @@ echo "all $(echo "$PKGS" | wc -w) packages resolve in repos"
 
 # ------------------------------------------------------------- 3. install full list
 echo "== [3] installing the full package list into the container =="
-pacman -S --noconfirm --needed $(grep -vE '^\s*#|^\s*$' "$PROFILE_DIR/packages.x86_64") > /tmp/pkg-install.log 2>&1 || { tail -30 /tmp/pkg-install.log; exit 1; }
+# settle the jack provider FIRST (pipewire-jack vs jack2 otherwise breaks the batch)
+pacman -S --noconfirm --needed pipewire-jack > /tmp/pkg-install.log 2>&1 || { tail -20 /tmp/pkg-install.log; exit 1; }
+pacman -S --noconfirm --needed $(grep -vE '^\s*#|^\s*$' "$PROFILE_DIR/packages.x86_64" | grep -vx pipewire-jack) >> /tmp/pkg-install.log 2>&1 || { tail -30 /tmp/pkg-install.log; exit 1; }
 locale-gen
 echo "container now has: $(pacman -Qq | wc -l) packages"
 

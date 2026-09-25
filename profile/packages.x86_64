@@ -50,8 +50,6 @@ hyprsunset
 hyprpicker
 hyprpolkitagent
 hyprquery-git
-# name placeholder satisfied by a zero-content shim built in CI (real files: hyprquery-git)
-hyprquery
 awww
 waybar
 dunst
