@@ -152,6 +152,13 @@ pacman -S --noconfirm --needed $(grep -vE '^\s*#|^\s*$' "$PROFILE_DIR/packages.x
 sed -i 's/^#en_US\.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
 locale-gen
 echo "container now has: $(pacman -Qq | wc -l) packages"
+# GitHub release assets are capped at 2 GiB — the v1.2.0 ISO (2.4 GiB) cannot be
+# published as-is (HTTP 422 'size must be less than 2147483648'). Print the
+# heavy hitters once so trims are data-driven, not guesswork.
+echo "== [3b] size survey (top 25 packages by installed size) =="
+pacman -Qi 2>/dev/null | awk '/^Name/ {n=$3} /^Installed Size/ {printf "%10.1f MiB  %s\n", $4, n}' | sort -rn | head -25
+echo "== [3b] biggest /usr trees (MiB) =="
+du -xm /usr 2>/dev/null | sort -rn | head -12
 
 # ------------------------------------------------------------- 4. user + Hyde
 echo "== [4] creating user bna + installing Hyde =="
