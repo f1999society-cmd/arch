@@ -63,27 +63,36 @@ for p in $PKGS; do
 done
 if [ "${#MISSING[@]}" -gt 0 ]; then
   echo "not in official+chaotic repos, building locally: ${MISSING[*]}"
-  # build the stragglers with paru (from chaotic), then expose them to pacstrap
-  # through a throwaway local [bnasec-local] repo in the BUILD pacman.conf only
+  # clone from AUR + makepkg, expose to pacstrap via a throwaway [bnasec-local]
+  # repo appended to BOTH the container and build pacman.conf (runtime copy strips it)
   id builduser >/dev/null 2>&1 || useradd -m builduser
   echo 'builduser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/98-builduser
   chmod 440 /etc/sudoers.d/98-builduser
-  pacman -S --noconfirm --needed paru >/dev/null
-  sudo -u builduser paru -S --noconfirm --needed --removemake "${MISSING[@]}" > /tmp/aur-build.log 2>&1 || { tail -40 /tmp/aur-build.log; exit 1; }
   LOCALREPO=/tmp/bnasec-localrepo
-  mkdir -p "$LOCALREPO"
+  rm -rf "$LOCALREPO"; mkdir -p "$LOCALREPO"
   BUILT=()
   for p in "${MISSING[@]}"; do
-    f=$(ls /var/cache/pacman/pkg/${p}-*.pkg.tar.zst 2>/dev/null | sort -V | tail -n1)
-    [ -n "$f" ] && BUILT+=("$f")
+    BD="/tmp/aurbuild-$p"
+    rm -rf "$BD"; mkdir -p "$BD"; chown builduser: "$BD"
+    if ! sudo -u builduser git clone --depth 1 "https://aur.archlinux.org/${p}.git" "$BD" > "/tmp/aurbuild-$p.log" 2>&1; then
+      echo "AUR repo for '$p' not found"; tail -5 "/tmp/aurbuild-$p.log"; exit 1
+    fi
+    ( cd "$BD" && sudo -u builduser makepkg -sf --noconfirm --noprogressbar ) >> "/tmp/aurbuild-$p.log" 2>&1 || { echo "makepkg failed for $p:"; tail -40 "/tmp/aurbuild-$p.log"; exit 1; }
+    PKGFILE=$(ls "$BD"/*.pkg.tar.zst 2>/dev/null | head -n1)
+    [ -n "$PKGFILE" ] || { echo "no package produced for $p:"; tail -20 "/tmp/aurbuild-$p.log"; exit 1; }
+    mv "$PKGFILE" "$LOCALREPO/"
+    BUILT+=("$LOCALREPO/$(basename "$PKGFILE")")
+    echo "built locally: $(basename "$PKGFILE")"
   done
-  repo-add "$LOCALREPO/bnasec-local.db.tar.gz" "${BUILT[@]}" >/dev/null
-  grep -q '^\[bnasec-local\]' "$PROFILE_DIR/pacman.conf" || cat >> "$PROFILE_DIR/pacman.conf" <<EOF
+  repo-add "$LOCALREPO/bnasec-local.db.tar.gz" "${BUILT[@]}" > /tmp/repo-add.log 2>&1 || { cat /tmp/repo-add.log; exit 1; }
+  for conf in /etc/pacman.conf "$PROFILE_DIR/pacman.conf"; do
+    grep -q '^\[bnasec-local\]' "$conf" || cat >> "$conf" <<EOF
 
 [bnasec-local]
 Server = file://${LOCALREPO}
 SigLevel = Never
 EOF
+  done
   pacman -Sy --noconfirm >/dev/null
   for p in "${MISSING[@]}"; do
     pacman -Si "$p" >/dev/null 2>&1 || { echo "STILL UNRESOLVED: $p"; exit 1; }
