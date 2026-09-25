@@ -93,7 +93,11 @@ grep -aq "bnasec: checking persistence filesystem" "$TESTS/t1-serial.log" \
 # T1c/T2a/T3/T4 were false-passing on pure echo, run 36184894405)
 grep -aq "BNA_SHELL_READY_T1" "$TESTS/t1-serial.log" \
   && ok "T1c session reached (serial shell answering)" || bad "T1c session" "$TESTS/t1-serial.log"
-grep -aq "overlay" <(grep -a "findmnt" "$TESTS/t1-serial.log") \
+# findmnt prints 'overlay' as its whole line — filtering for lines that ALSO
+# contain 'findmnt' can never match the output (only the typed echo does),
+# which is exactly how T1d false-failed (run 36184894405). Grep the log
+# directly: no other serial content says 'overlay'.
+grep -aq "overlay" "$TESTS/t1-serial.log" \
   && ok "T1d root is overlay (persistent upperdir)" || bad "T1d overlay root" "$TESTS/t1-serial.log"
 
 # ================= T2: persistence proof across two boots =================
