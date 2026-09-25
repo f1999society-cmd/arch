@@ -141,6 +141,11 @@ echo "== [3] installing the full package list into the container =="
 pacman -Rdd --noconfirm --nosave jack2 > /dev/null 2>&1 || true
 pacman -S --noconfirm --needed pipewire-jack > /tmp/pkg-install.log 2>&1 || { tail -20 /tmp/pkg-install.log; exit 1; }
 pacman -S --noconfirm --needed $(grep -vE '^\s*#|^\s*$' "$PROFILE_DIR/packages.x86_64" | grep -vx pipewire-jack) >> /tmp/pkg-install.log 2>&1 || { tail -30 /tmp/pkg-install.log; exit 1; }
+# container's locale.gen ships fully commented -> locale-gen generates nothing ->
+# the ISO would have no compiled en_US.UTF-8 (run 36140211038: empty locale data).
+# Uncomment it, then generate; the compiled per-locale dirs under /usr/lib/locale
+# are unowned by glibc and get baked into the airootfs during collect.
+sed -i 's/^#en_US\.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
 locale-gen
 echo "container now has: $(pacman -Qq | wc -l) packages"
 
@@ -286,8 +291,9 @@ cp /etc/pacman.d/chaotic-mirrorlist "$A/etc/pacman.d/chaotic-mirrorlist"
 
 # locale data (locale-gen ran in the container). Skip glibc-owned dirs (C.utf8 is
 # shipped by the glibc package — pacstrap would hit the same "exists in filesystem").
+mkdir -p "$A/usr/lib/locale"
 copy_unowned /usr/lib/locale "$A/usr/lib/locale" glibc
-echo "locale data: $(du -sh "$A/usr/lib/locale" | cut -f1)"
+echo "locale data: $([ -d "$A/usr/lib/locale" ] && du -sh "$A/usr/lib/locale" | cut -f1 || echo none)"
 
 # build metadata
 mkdir -p "$A/usr/share/bnasec"
@@ -305,6 +311,9 @@ echo "collected. home size: $(du -sh "$A/home/bna" | cut -f1)"
 
 # ------------------------------------------------------------- 6. mkarchiso
 echo "== [6] mkarchiso =="
+# free the container's package cache — the runner disk also holds the profile
+# copy and the container itself
+pacman -Sc --noconfirm >/dev/null 2>&1 || true
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(date +%s)}"
 mkarchiso -v -w "$WORK" -o "$OUT" "$PROFILE_DIR" 2>&1 | tail -60
 ISO=$(find "$OUT" -maxdepth 1 -name '*.iso' | head -1)

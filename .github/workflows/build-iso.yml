@@ -17,11 +17,16 @@ jobs:
     timeout-minutes: 180
     container:
       image: archlinux:base-devel
-      options: --privileged
+      # bind-mount the runner's big secondary disk: mkarchiso's pacstrap (~7GB),
+      # the ISO (~2.5GB) and the boot-test images do not fit next to the container
+      # and the 1.4GB profile home on the workspace filesystem (run 36140211038:
+      # "Partition /__w too full: 1574201 blocks needed, 402977 blocks free")
+      options: --privileged --volume /mnt/bnasec-ci:/mnt/bnasec-ci
     env:
       PROFILE_DIR: ${{ github.workspace }}/profile
-      OUT_DIR: ${{ github.workspace }}/bnasec-build-out
-      TEST_DIR: ${{ github.workspace }}/bnasec-tests
+      WORK_DIR: /mnt/bnasec-ci/work
+      OUT_DIR: /mnt/bnasec-ci/out
+      TEST_DIR: /mnt/bnasec-ci/tests
       GH_TOKEN: ${{ github.token }}
       TERM: xterm-256color
     steps:
@@ -44,7 +49,7 @@ jobs:
         if: always()
         run: |
           mkdir -p diag
-          cp -v bnasec-tests/*.log diag/ 2>/dev/null || true
+          cp -v "$TEST_DIR"/*.log diag/ 2>/dev/null || true
           cp -v /tmp/hyde-install.log diag/ 2>/dev/null || true
           cp -v /tmp/pkg-install.log diag/ 2>/dev/null || true
           ls -la "$OUT_DIR" || true
