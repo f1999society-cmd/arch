@@ -246,9 +246,9 @@ rm -rf /home/bna/HyDE /home/bna/.local/state/hyde/python_env
 # tens of MB to GB of dead weight; it is tmpfs-shadowed at runtime anyway (fstab)
 du -sh /home/bna/.cache 2>/dev/null || true
 rm -rf /home/bna/.cache
-# keep 5 of the 12 Hyde themes — runner SSD (~14GB) + ISO size budget; each theme
+# keep 3 of the 12 Hyde themes — runner SSD (~14GB) + ISO size budget; each theme
 # ships its wallpapers. Dropped ones are re-importable at runtime via themepatcher.
-KEEP_THEMES=("Catppuccin Mocha" "Catppuccin Latte" "Tokyo Night" "Rosé Pine" "Gruvbox Retro")
+KEEP_THEMES=("Catppuccin Mocha" "Rosé Pine" "Gruvbox Retro")
 if [ -d /home/bna/.config/hyde/themes ]; then
   for t in /home/bna/.config/hyde/themes/*; do
     base=$(basename "$t"); keep=0
@@ -416,14 +416,37 @@ echo "pruned. container: $(pacman -Qq 2>/dev/null | wc -l) packages, free: $(df 
 
 # ------------------------------------------------------------- 6. mkarchiso
 echo "== [6] mkarchiso =="
-# WIPE the container package cache: step [3] downloaded while the disk flirted
-# with full, and ENOSPC delayed-allocation left cache files that pass pacman's
-# initial check but fail pacstrap's ("invalid or corrupted package (PGP
-# signature)" — the runner-side twin of the 1.1.x stick's ext4 error-28 rot).
-# pacstrap reuses this cache via -c, so it must be pristine. Also frees ~2.5GB.
+# WIPE the container package cache (frees ~2.5GB; step [3] downloads are dead
+# weight now and the disk-full window may have corrupted them in-place)
 rm -rf /var/cache/pacman/pkg/*
+# rebuild the pacman keyring: the step-[3] disk-full window corrupts written
+# files via delayed allocation (the runner-side twin of the 1.1.x stick's ext4
+# error-28 rot) — /etc/pacman.d/gnupg written back then fails every signature
+# check with 'invalid or corrupted package (PGP signature)'. Fresh populate.
+rm -rf /etc/pacman.d/gnupg
+pacman-key --init >/dev/null 2>&1
+pacman-key --populate archlinux chaotic 2>&1 | tail -3
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(date +%s)}"
-mkarchiso -v -w "$WORK" -o "$OUT" "$PROFILE_DIR" 2>&1 | tail -60
+mkarchiso -v -w "$WORK" -o "$OUT" "$PROFILE_DIR" > /tmp/mkarchiso.log 2>&1 &
+MKPID=$!
+# cache reaper: the downloaded tarballs (~3GB in /var/cache/pacman/pkg) are dead
+# weight the moment the install phase ends — wipe them while mksquashfs/xorriso
+# run, or the ~14GB runner SSD cannot hold work tree + ISO at peak
+( while kill -0 $MKPID 2>/dev/null; do
+    if grep -q "Done! Packages installed successfully" /tmp/mkarchiso.log 2>/dev/null; then
+      sleep 5; rm -rf /var/cache/pacman/pkg/*; echo "cache reaped at $(date -u +%H:%M:%S)"; break
+    fi
+    sleep 10
+  done ) &
+REAPER=$!
+set +e
+wait $MKPID
+MKRC=$?
+set -e
+kill $REAPER 2>/dev/null || true
+wait $REAPER 2>/dev/null || true
+tail -60 /tmp/mkarchiso.log
+[ "$MKRC" = 0 ] || { echo "mkarchiso failed rc=$MKRC"; grep -iE "error|failed" /tmp/mkarchiso.log | tail -20; exit 1; }
 ISO=$(find "$OUT" -maxdepth 1 -name '*.iso' | head -1)
 [ -n "$ISO" ] || { echo "no ISO produced"; exit 1; }
 echo "ISO: $ISO ($(du -h "$ISO" | cut -f1))"
