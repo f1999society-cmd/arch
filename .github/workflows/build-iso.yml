@@ -1,0 +1,121 @@
+name: build-bnasec-iso
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: "skip QEMU boot tests (build only)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    container:
+      image: archlinux:base-devel
+      options: --privileged
+    env:
+      PROFILE_DIR: ${{ github.workspace }}/profile
+      OUT_DIR: ${{ github.workspace }}/bnasec-build-out
+      TEST_DIR: ${{ github.workspace }}/bnasec-tests
+      GH_TOKEN: ${{ github.token }}
+      TERM: xterm-256color
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: install build + test tooling
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed archiso git jq qemu-desktop edk2-ovmf github-cli
+
+      - name: build ISO (Hyde baked in)
+        run: bash ci/build-iso.sh
+
+      - name: boot tests (BIOS / persistence proof / RAM-only / UEFI)
+        if: ${{ github.event.inputs.skip_tests != 'true' }}
+        run: bash ci/boot-tests.sh
+
+      - name: collect diagnostics
+        if: always()
+        run: |
+          mkdir -p diag
+          cp -v bnasec-tests/*.log diag/ 2>/dev/null || true
+          cp -v /tmp/hyde-install.log diag/ 2>/dev/null || true
+          cp -v /tmp/pkg-install.log diag/ 2>/dev/null || true
+          ls -la "$OUT_DIR" || true
+
+      - name: upload diagnostics artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bnasec-diag
+          path: diag/
+          if-no-files-found: ignore
+
+      - name: upload ISO artifact (for failed runs)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bnasec-iso-untested
+          path: ${{ env.OUT_DIR }}/*.iso
+          retention-days: 3
+
+      - name: publish release v1.2.0
+        if: ${{ success() && github.event.inputs.skip_tests != 'true' }}
+        run: |
+          ISO=$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' | head -1)
+          SHAFILE="$OUT_DIR/$(basename "$ISO").sha256"
+          sha256sum "$ISO" > "$SHAFILE"
+          SHA=$(awk '{print $1}' "$SHAFILE")
+          SIZE=$(du -h "$ISO" | cut -f1)
+          cat > release-notes.md <<EOF
+          # bnasec-arch 1.2.0 — HyDE desktop, rebuilt from the ground up
+
+          Full rebuild of the persistent live ISO. The rice is now
+          [HyDE](https://github.com/HyDE-project/HyDE) (Hyde-project/hyde), and the
+          persistence layer was rebuilt with every failure from the 1.1.x saga fixed.
+
+          ## Persistence (rebuilt + battle-tested)
+          - **First boot auto-creates the persistence partition** on the stick (ext4 with journal, label \`persistence\`), zero manual partitioning
+          - **Every boot fscks the persistence fs** (preen, auto-escalating to full repair) — the ext4 allocator rot that killed 1.1.x sessions gets fixed before the overlay mounts
+          - \`tune2fs -m 0\` on every boot — no more phantom "No space left" from the 5% root reserve
+          - If persistence cannot be guaranteed, the session **boots RAM-only instead of dropping to a rescue shell**
+          - Menu: \`bnasec HyDE — persistent\` (default) / \`RAM-only session\` / \`verbose (debug)\`
+
+          ## Anti-rot / anti-lag baked in (toolbox lessons)
+          - \`/var/cache/pacman/pkg\`, \`/tmp\`, \`/var/tmp\`, \`/var/log\`, \`~/.cache\` -> tmpfs (package downloads never touch the stick)
+          - journald volatile (32M cap) + 60s write batching sysctls + zram swap (ram/2, zstd)
+          - toolbox v1.7 with menu 11 **system doctor** preinstalled at \`/usr/local/bin/bnasec-toolbox\` (alias \`bnasec\`)
+
+          ## HyDE desktop
+          - Full [HyDE](https://github.com/HyDE-project/HyDE) rice baked in: waybar, rofi, wlogout, wallbash theming, Bibata cursor, nerd fonts, sddm Corners greeter, zsh + starship + fastfetch
+          - chaotic-aur preconfigured (paru + prebuilt AUR coverage, no compiling on the stick)
+
+          ## Verified in CI (QEMU)
+          - BIOS boot from dd'd USB image: persistence auto-created, overlay root, session answering
+          - Persistence proof: marker written inside the live session read back after a full reboot
+          - RAM-only session boots volatile
+          - UEFI boot verified via OVMF
+
+          ## Login
+          - user \`bna\` / password \`bnasec\` (sudo: same password)
+
+          ## Flash
+          \`\`\`bash
+          sha256sum bnasec-arch-1.2.0-amd64.iso
+          # expected: $SHA
+          sudo dd if=bnasec-arch-1.2.0-amd64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+          \`\`\`
+          ISO size: $SIZE. A 4 GB+ stick is enough; the rest becomes persistence.
+          EOF
+          gh release delete v1.2.0 --yes --cleanup-tag 2>/dev/null || true
+          gh release create v1.2.0 "$ISO" "$(basename "$ISO").sha256" \
+            --title "bnasec-arch-1.2.0 — HyDE + hardened persistence" \
+            --notes-file release-notes.md
+          echo "released:"
+          gh release view v1.2.0 --json assets --jq '.assets[].name'

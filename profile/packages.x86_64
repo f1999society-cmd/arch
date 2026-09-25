@@ -1,0 +1,132 @@
+# bnasec 1.2.0 — airootfs package list
+# Every name here is validated against configured repos (core/extra/multilib/chaotic-aur)
+# by ci/build-iso.sh BEFORE the heavy build starts.
+
+# --------------------------------------------------- base system
+base
+# AUR coverage: prebuilt via chaotic-aur (no compile needed on the stick)
+chaotic-keyring
+chaotic-mirrorlist
+paru
+base-devel
+linux
+linux-firmware
+mkinitcpio
+mkinitcpio-archiso
+e2fsprogs
+zram-generator
+sudo
+git
+curl
+wget
+unzip
+vim
+jq
+parallel
+pacman-contrib
+usbutils
+pciutils
+dosfstools
+ntfs-3g
+exfatprogs
+qemu-guest-agent
+reflector
+
+# --------------------------------------------------- network
+networkmanager
+wpa_supplicant
+network-manager-applet
+bluez
+bluez-utils
+blueman
+openssh
+
+# --------------------------------------------------- Hyprland desktop (HyDE core)
+hyprland
+uwsm
+hyprlock
+hypridle
+hyprsunset
+hyprpicker
+hyprpolkitagent
+hyprquery
+awww
+waybar
+dunst
+rofi
+wlogout
+grim
+slurp
+satty
+cliphist
+wl-clip-persist
+xdg-desktop-portal-hyprland
+xdg-desktop-portal-gtk
+xdg-user-dirs
+xorg-xwayland
+brightnessctl
+playerctl
+udiskie
+libnotify
+noto-fonts
+noto-fonts-emoji
+lua
+luarocks
+nwg-look
+nwg-displays
+qt5ct
+qt6ct
+kvantum
+kvantum-qt5
+qt5-wayland
+qt6-wayland
+
+# --------------------------------------------------- applications
+firefox
+kitty
+fastfetch
+dolphin
+ark
+qt5-imageformats
+ffmpegthumbs
+kde-cli-tools
+kimageformats
+fzf
+btop
+cava
+wf-recorder
+code
+spotify-launcher
+
+# --------------------------------------------------- shell (HyDE: zsh + starship)
+zsh
+fish
+starship
+
+# --------------------------------------------------- Hyde python tooling (deez dots manager)
+python
+python-pip
+
+# --------------------------------------------------- audio
+pipewire
+pipewire-alsa
+pipewire-audio
+pipewire-jack
+pipewire-pulse
+gst-plugin-pipewire
+wireplumber
+pavucontrol
+pamixer
+sof-firmware
+alsa-ucm-conf
+alsa-utils
+
+# --------------------------------------------------- display manager
+sddm
+qt5-quickcontrols
+qt5-quickcontrols2
+qt5-graphicaleffects
+
+# --------------------------------------------------- imaging / media
+imagemagick
+ffmpeg

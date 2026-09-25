@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2034
+
+build() {
+    # bnasec persistence guarantee binaries (used by the archiso_bnasec hook)
+    add_binary /usr/bin/e2fsck
+    add_binary /usr/bin/mkfs.ext4
+    add_binary /usr/bin/tune2fs
+    add_binary /usr/bin/sfdisk
+    add_binary /usr/bin/partx
+    add_binary /usr/bin/lsblk
+    add_binary /usr/bin/awk
+    add_binary /usr/bin/sleep
+
+    add_runscript
+}
+
+help() {
+    cat <<HELPEOF
+bnasec archiso hook (fork of upstream archiso)
+  - auto-creates the persistence partition on the boot disk on first boot
+    (mkfs.ext4 -m 0 -L persistence)
+  - fscks the persistence partition on every boot (preen, escalating to -fy)
+  - clears the ext4 root-reserved block pool (tune2fs -m 0)
+  - falls back to a volatile session when persistence cannot be guaranteed
+  - boot parameters: archisolabel=... cow_label=persistence cow_directory=persist
+HELPEOF
+}
+
+# vim: set ft=sh:
