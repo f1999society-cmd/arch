@@ -483,14 +483,28 @@ MKPID=$!
     sleep 10
   done ) &
 REAPER=$!
+# tree reaper: the pacstrap airootfs tree (~4-5GB) is dead weight the moment
+# mksquashfs finishes — mkarchiso only needs the .sfs afterwards, but it never
+# frees the tree before xorriso, and tree + sfs + sfs-copy + 2.6GB ISO cannot
+# fit on the ~14GB runner SSD (run 36166507765: 'Image size 1249680s exceeds
+# free space on media 676178s'). The checksum marker fires right after
+# mksquashfs — drop the tree the instant it appears, before 'Creating ISO image'.
+( while kill -0 $MKPID 2>/dev/null; do
+    if grep -q "Creating checksum file for self-test" /tmp/mkarchiso.log 2>/dev/null; then
+      sleep 2; du -sh "$WORK"/x86_64/airootfs 2>/dev/null; rm -rf "$WORK"/x86_64/airootfs
+      echo "airootfs tree reaped at $(date -u +%H:%M:%S)"; break
+    fi
+    sleep 3
+  done ) &
+TREE_REAPER=$!
 set +e
 wait $MKPID
 MKRC=$?
 set -e
-kill $REAPER 2>/dev/null || true
-wait $REAPER 2>/dev/null || true
+kill $REAPER $TREE_REAPER 2>/dev/null || true
+wait $REAPER $TREE_REAPER 2>/dev/null || true
 tail -60 /tmp/mkarchiso.log
-[ "$MKRC" = 0 ] || { echo "mkarchiso failed rc=$MKRC"; grep -iE "error|failed" /tmp/mkarchiso.log | tail -20; exit 1; }
+[ "$MKRC" = 0 ] || { echo "mkarchiso failed rc=$MKRC"; grep -iE "error|failed" /tmp/mkarchiso.log | grep -viE "libgpg-error|perl-error|xcb-util-errors|-error-" | tail -20; exit 1; }
 ISO=$(find "$OUT" -maxdepth 1 -name '*.iso' | head -1)
 [ -n "$ISO" ] || { echo "no ISO produced"; exit 1; }
 echo "ISO: $ISO ($(du -h "$ISO" | cut -f1))"
