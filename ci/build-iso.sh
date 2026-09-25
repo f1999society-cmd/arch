@@ -471,7 +471,20 @@ rm -rf /etc/pacman.d/gnupg
 pacman-key --init 2>&1 | tail -2 || { echo "!! pacman-key --init failed:"; tail -5 /tmp/purge.log; exit 1; }
 pacman-key --populate archlinux chaotic 2>&1 | tail -3 || { echo "!! pacman-key --populate failed"; exit 1; }
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(date +%s)}"
-mkarchiso -v -w "$WORK" -o "$OUT" "$PROFILE_DIR" > /tmp/mkarchiso.log 2>&1 &
+# xorriso's free-space check runs against the filesystem holding the ISO file —
+# the runner SSD has only ~2.2GB free at this point while the ISO is 2.6GB
+# (runs 36166507765 + 36168421566 both died at xorriso even with the tree
+# reaped). Build the ISO into a dedicated 6GB tmpfs (--privileged container,
+# ~16GB RAM), free the work tree after the assertions, then move it to disk.
+ISO_TMP=/mnt/bnasec-iso-tmp
+mkdir -p "$ISO_TMP"
+if mount -t tmpfs -o size=6g tmpfs "$ISO_TMP" 2>/dev/null; then
+  echo "ISO tmpfs armed (6g)"
+else
+  echo "WARN: tmpfs mount failed — ISO goes straight to disk ($OUT)"
+  ISO_TMP="$OUT"
+fi
+mkarchiso -v -w "$WORK" -o "$ISO_TMP" "$PROFILE_DIR" > /tmp/mkarchiso.log 2>&1 &
 MKPID=$!
 # cache reaper: the downloaded tarballs (~3GB in /var/cache/pacman/pkg) are dead
 # weight the moment the install phase ends — wipe them while mksquashfs/xorriso
@@ -505,10 +518,9 @@ kill $REAPER $TREE_REAPER 2>/dev/null || true
 wait $REAPER $TREE_REAPER 2>/dev/null || true
 tail -60 /tmp/mkarchiso.log
 [ "$MKRC" = 0 ] || { echo "mkarchiso failed rc=$MKRC"; grep -iE "error|failed" /tmp/mkarchiso.log | grep -viE "libgpg-error|perl-error|xcb-util-errors|-error-" | tail -20; exit 1; }
-ISO=$(find "$OUT" -maxdepth 1 -name '*.iso' | head -1)
+ISO=$(find "$ISO_TMP" -maxdepth 1 -name '*.iso' | head -1)
 [ -n "$ISO" ] || { echo "no ISO produced"; exit 1; }
 echo "ISO: $ISO ($(du -h "$ISO" | cut -f1))"
-
 # ------------------------------------------------------------- 7. assertions
 echo "== [7] post-build assertions =="
 SFS=$(find "$WORK" -name 'airootfs.sfs' | head -1)
@@ -529,9 +541,12 @@ SUID=$(find "$CHECK/usr" -perm -4000 -type f 2>/dev/null | wc -l)
 [ "$SUID" -ge 15 ] && echo "PASS setuid binaries intact ($SUID)" || { echo "FAIL setuid count low ($SUID)"; FAIL=1; }
 [ "$FAIL" = 0 ] || { echo "ASSERTIONS FAILED"; exit 1; }
 
-sha256sum "$ISO" > "$ISO.sha256"
-# free the biggest disk chunk (~7GB pacstrap tree) before the boot tests —
-# qemu gets installed by boot-tests.sh and the runner only has ~14GB
+# free the work tree BEFORE moving the 2.6GB ISO out of tmpfs — the sfs + tree
+# are the biggest disk chunks and the assertions are done with them
 rm -rf "$WORK" /tmp/sfs-check
-echo "work tree freed. free: $(df -h / | awk 'NR==2{print $4}')"
+echo "work tree freed. free: $(df -h /mnt | awk 'NR==2{print $4}')"
+mv -f "$ISO" "$OUT"/ || { echo "!! ISO move out of tmpfs failed"; exit 1; }
+umount "$ISO_TMP" 2>/dev/null || true
+ISO="$OUT/$(basename "$ISO")"
+sha256sum "$ISO" > "$ISO.sha256"
 echo "== BUILD COMPLETE: $ISO =="
