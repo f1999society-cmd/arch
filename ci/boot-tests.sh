@@ -55,7 +55,11 @@ Q() {  # base qemu invocation (arg1: hard timeout seconds, rest: extra args)
         -no-reboot "$@"
 }
 
-DISK_ARGS=(-drive if=none,id=udisk,format=raw,file="$TESTS/usb.img" -device usb-storage,drive=udisk,removable=on)
+# qemu 9/10 dropped the implicit USB controller on q35 — create one explicitly
+# or usb-storage dies with "No 'usb-bus' bus found" (run 36179405769)
+DISK_ARGS=(-drive if=none,id=udisk,format=raw,file="$TESTS/usb.img"
+           -device qemu-xhci,id=xhci
+           -device usb-storage,bus=xhci.0,drive=udisk,removable=on)
 
 # ---- extract kernel+initrd from the ISO for kernel-direct boots (deterministic entry selection)
 echo "extracting kernel/initrd from ISO"
