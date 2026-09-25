@@ -201,6 +201,7 @@ chmod 700 /run/user/1000
 # what ended runs 8574ce3/9af4eb7 right after the theme step). With the backup
 # marker present the whole prompt block is skipped, so extract Corners + write the
 # exact files the prompt path would have written (backup stays empty like Hyde).
+mkdir -p /usr/share/sddm/themes /etc/sddm.conf.d /usr/share/sddm/faces
 if [ ! -d /usr/share/sddm/themes/Corners ]; then
   tar -xzf /home/bna/HyDE/Source/arcs/Sddm_Corners.tar.gz -C /usr/share/sddm/themes/
 fi
