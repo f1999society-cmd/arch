@@ -388,6 +388,7 @@ perl
 gdbm
 gcc-libs
 libseccomp
+libcap
 EOF
 KEEP="^$(sort -u /tmp/keep-pkgs.txt | grep -v '^$' | paste -sd'|')$"
 echo "keep-closure: $(sort -u /tmp/keep-pkgs.txt | grep -cv '^$') packages"
@@ -448,7 +449,7 @@ heal_pass() {
   [ "$broken" = 1 ] || return 0
   echo "heal: force-reextracting critical toolchain"
   $PAC -S --noconfirm -dd gcc-libs libseccomp libgcrypt libgpg-error libassuan \
-    libksba npth sqlite pacman archiso gnupg squashfs-tools libisoburn >> /tmp/purge.log 2>&1 \
+    libksba npth sqlite libcap pacman archiso gnupg squashfs-tools libisoburn >> /tmp/purge.log 2>&1 \
     || { echo "!! heal reinstall failed:"; tail -8 /tmp/purge.log; return 1; }
   /sbin/ldconfig 2>/dev/null || true
   local still=0
@@ -477,7 +478,7 @@ rm -rf /var/cache/pacman/pkg/*
 rm -rf /etc/pacman.d/gnupg
 pacman-key --init 2>&1 | tail -2 || { echo "!! pacman-key --init failed:"; tail -5 /tmp/purge.log; exit 1; }
 pacman-key --populate archlinux chaotic 2>&1 | tail -3 || { echo "!! pacman-key --populate failed"; exit 1; }
-echo "profile usr/local/bin: $(ls -la "$PROFILE_DIR/airootfs/usr/local/bin" 2>&1 | tail -n +2 | tr '\n' '|' )"
+echo "profile usr/local/bin: $(ls -la "$PROFILE_DIR/airootfs/usr/local/bin" 2>&1 | tr '\n' '|')"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(date +%s)}"
 # xorriso's free-space check runs against the filesystem holding the ISO file —
 # the runner SSD has only ~2.2GB free at this point while the ISO is 2.6GB

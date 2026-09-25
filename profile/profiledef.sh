@@ -21,4 +21,12 @@ file_permissions=(
   ["/etc/shadow"]="0:0:400"
   ["/etc/gshadow"]="0:0:400"
   ["/home/bna/"]="1000:1000:750"
+  # mkarchiso copies custom airootfs with 'cp -af --no-preserve=ownership,mode'
+  # (mkarchiso line 320) — everything NOT listed here lands as 644. sudo
+  # silently DROPS sudoers.d files that are not 0440; the toolbox/hook need 755.
+  ["/usr/local/bin/bnasec-toolbox"]="0:0:755"
+  ["/usr/local/bin/bnasec"]="0:0:755"
+  ["/usr/lib/initcpio/hooks/archiso_bnasec"]="0:0:755"
+  ["/usr/lib/initcpio/install/archiso_bnasec"]="0:0:644"
+  ["/etc/sudoers.d/bnasec"]="0:0:440"
 )
