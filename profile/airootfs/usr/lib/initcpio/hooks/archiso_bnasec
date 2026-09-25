@@ -32,7 +32,7 @@ _mnt_dmsnapshot() {
 
     if [ "${cow_persistent}" = "P" ]; then
         if [ -f "/run/archiso/cowspace/${cow_directory}/${img_name}.cow" ]; then
-            msg ":: Found '/run/archiso/cowspace/${cow_directory}/${img_name}.cow', using as persistent."
+            bnasec_msg ":: bnasec: found persistent cow file, using it (changes survive reboots)"
         else
             msg ":: Creating '/run/archiso/cowspace/${cow_directory}/${img_name}.cow' as persistent."
             truncate -s "${cow_spacesize}" "/run/archiso/cowspace/${cow_directory}/${img_name}.cow"
@@ -239,6 +239,14 @@ _verify_cms_signature() {
 # its full block pool; on any failure the caller drops persistence and boots
 # volatile instead of stranding the user in the initramfs shell.
 # ---------------------------------------------------------------------------
+bnasec_msg() {
+    # bypass mkinitcpio's quiet suppression: these lines are the product's
+    # persistence guarantee feedback — they print to the active console (and
+    # kmsg) whether or not 'quiet' is on the cmdline
+    echo "$*" > /dev/kmsg 2>/dev/null
+    echo "$*" > /dev/console 2>/dev/null
+}
+
 bnasec_ensure_persist() {
     local persist_dev="/dev/disk/by-label/persistence"
     local boot_dev boot_disk newpart rc
@@ -256,7 +264,7 @@ bnasec_ensure_persist() {
         esac
         [ -b "${boot_disk}" ] || return 1
 
-        msg ":: bnasec: no persistence partition found, creating one on '${boot_disk}'"
+        bnasec_msg ":: bnasec: no persistence partition found, creating one on '${boot_disk}'"
         echo 'type=83' | sfdisk --append --force "${boot_disk}" >/dev/null 2>&1 || return 1
         partx -u "${boot_disk}" >/dev/null 2>&1
         sleep 1
@@ -268,11 +276,11 @@ bnasec_ensure_persist() {
         mkfs.ext4 -q -m 0 -L persistence "${newpart}" || return 1
     fi
 
-    msg ":: bnasec: checking persistence filesystem"
+    bnasec_msg ":: bnasec: checking persistence filesystem"
     e2fsck -p "${persist_dev}" >/dev/null 2>&1
     rc=$?
     if [ "${rc}" -ge 4 ]; then
-        msg ":: bnasec: persistence fs needs a full repair pass"
+        bnasec_msg ":: bnasec: persistence fs needs a full repair pass"
         e2fsck -fy "${persist_dev}" >/dev/null 2>&1 || return 1
     elif [ "${rc}" -ge 2 ]; then
         # fs modified (journal replayed / minor fixes): fine, keep going
@@ -429,7 +437,7 @@ archiso_mount_handler() {
         # mounting it. On failure fall back to a volatile session instead of the
         # initramfs rescue shell.
         if ! bnasec_ensure_persist; then
-            msg ":: bnasec: persistence unavailable this boot — continuing volatile (RAM-only)"
+            bnasec_msg ":: bnasec: persistence unavailable this boot — continuing volatile (RAM-only)"
             cow_device=""
             cow_persistent="N"
         fi

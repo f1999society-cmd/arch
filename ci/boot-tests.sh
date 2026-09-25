@@ -79,7 +79,7 @@ sync
 # ================= T1: BIOS boot from dd'd USB image, default persistent entry =================
 echo "== T1: BIOS boot, default persistent entry =="
 { sleep "$BOOT_WAIT"; \
-  echo "echo BNA_T1_SHELL_READY"; sleep "$CMD_WAIT"; \
+  echo "printf 'BNA_SHELL_READY_%s\\n' T1"; sleep "$CMD_WAIT"; \
   echo "findmnt -n -o FSTYPE /"; sleep 8; \
   echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
     -serial stdio -monitor none > "$TESTS/t1-serial.log" 2>&1
@@ -87,7 +87,11 @@ grep -aq "no persistence partition found, creating one" "$TESTS/t1-serial.log" \
   && ok "T1a persistence partition auto-created on first boot" || bad "T1a auto-persist" "$TESTS/t1-serial.log"
 grep -aq "bnasec: checking persistence filesystem" "$TESTS/t1-serial.log" \
   && ok "T1b persist fs checked (fsck ran)" || bad "T1b fsck" "$TESTS/t1-serial.log"
-grep -aq "BNA_T1_SHELL_READY" "$TESTS/t1-serial.log" \
+# markers are printf-formatted so the terminal ECHO of the typed line can never
+# match the grep — only a real shell executing it produces the literal string
+# (systemd-firstboot's wizard used to eat stdin and echo the markers back:
+# T1c/T2a/T3/T4 were false-passing on pure echo, run 36184894405)
+grep -aq "BNA_SHELL_READY_T1" "$TESTS/t1-serial.log" \
   && ok "T1c session reached (serial shell answering)" || bad "T1c session" "$TESTS/t1-serial.log"
 grep -aq "overlay" <(grep -a "findmnt" "$TESTS/t1-serial.log") \
   && ok "T1d root is overlay (persistent upperdir)" || bad "T1d overlay root" "$TESTS/t1-serial.log"
@@ -96,13 +100,13 @@ grep -aq "overlay" <(grep -a "findmnt" "$TESTS/t1-serial.log") \
 echo "== T2: persistence proof =="
 PERSIST_APPEND="archisobasedir=arch archisolabel=BNASEC_120 cow_label=persistence cow_directory=persist console=ttyS0,115200n8 quiet loglevel=3"
 { sleep "$BOOT_WAIT"; \
-  echo "echo bnasec | sudo -S sh -c 'echo BNA_PERSIST_PROOF_120 > /var/lib/persist-proof'"; sleep "$CMD_WAIT"; \
+  echo "echo bnasec | sudo -S sh -c \"printf 'BNA_PERSIST_PROOF_%s\\n' 120 > /var/lib/persist-proof\""; sleep "$CMD_WAIT"; \
   echo "cat /var/lib/persist-proof"; sleep 8; \
-  echo "echo BNA_T2_WROTE"; sleep "$CMD_WAIT"; \
+  echo "printf 'BNA_T2_WROTE_%s\\n' ok"; sleep "$CMD_WAIT"; \
   echo "echo bnasec | sudo -S systemctl poweroff --no-wall"; sleep "$CMD_WAIT"; } | \
   Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
     "${DISK_ARGS[@]}" -serial stdio -monitor none > "$TESTS/t2-boot1.log" 2>&1
-grep -aq "BNA_T2_WROTE" "$TESTS/t2-boot1.log" \
+grep -aq "BNA_T2_WROTE_ok" "$TESTS/t2-boot1.log" \
   && ok "T2a marker written inside live session" || bad "T2a write" "$TESTS/t2-boot1.log"
 
 { sleep "$BOOT_WAIT"; \
@@ -116,11 +120,11 @@ grep -aq "BNA_PERSIST_PROOF_120" "$TESTS/t2-boot2.log" \
 
 # ================= T3: RAM-only volatile session =================
 echo "== T3: RAM-only session =="
-{ sleep "$BOOT_WAIT"; echo "echo BNA_T3_VOLATILE"; sleep "$CMD_WAIT"; } | \
+{ sleep "$BOOT_WAIT"; echo "printf 'BNA_T3_VOLATILE_%s\\n' ok"; sleep "$CMD_WAIT"; } | \
   Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" \
     -append "archisobasedir=arch archisolabel=BNASEC_120 console=ttyS0,115200n8 quiet loglevel=3" \
     "${DISK_ARGS[@]}" -serial stdio -monitor none > "$TESTS/t3-serial.log" 2>&1
-grep -aq "BNA_T3_VOLATILE" "$TESTS/t3-serial.log" \
+grep -aq "BNA_T3_VOLATILE_ok" "$TESTS/t3-serial.log" \
   && ok "T3 volatile session boots" || bad "T3 volatile" "$TESTS/t3-serial.log"
 grep -aq "bnasec: persistence unavailable" "$TESTS/t3-serial.log" \
   && bad "T3 fell back unexpectedly" "$TESTS/t3-serial.log" || ok "T3 no persistence requested (correct)"
@@ -132,12 +136,12 @@ if [ -z "$OVMF_CODE" ]; then OVMF_CODE=$(find /usr/share/ovmf /usr/share/edk2* -
 if [ -n "$OVMF_CODE" ]; then
   OVMF_VARS_SRC=$(find /usr/share/edk2 /usr/share/ovmf -name 'OVMF_VARS.4m.fd' -o -name 'OVMF_VARS.fd' 2>/dev/null | head -1)
   cp -f "$OVMF_VARS_SRC" "$TESTS/ovmf-vars.fd"
-  { sleep "$BOOT_WAIT"; echo "echo BNA_T4_UEFI_READY"; sleep "$CMD_WAIT"; \
+  { sleep "$BOOT_WAIT"; echo "printf 'BNA_T4_UEFI_READY_%s\\n' ok"; sleep "$CMD_WAIT"; \
     echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
       -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
       -drive if=pflash,format=raw,file="$TESTS/ovmf-vars.fd" \
       -serial stdio -monitor none > "$TESTS/t4-serial.log" 2>&1
-  grep -aq "BNA_T4_UEFI_READY" "$TESTS/t4-serial.log" \
+  grep -aq "BNA_T4_UEFI_READY_ok" "$TESTS/t4-serial.log" \
     && ok "T4 UEFI session reached (serial shell answering)" || bad "T4 UEFI" "$TESTS/t4-serial.log"
 else
   echo "SKIP  T4 (no OVMF firmware found)"
