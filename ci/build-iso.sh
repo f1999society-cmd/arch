@@ -251,7 +251,10 @@ cp -a /home/bna/. "$A/home/bna/"
 copy_unowned() {
   local src="$1" dst="$2"; shift 2
   local owned="/tmp/owned.$$.txt"
-  pacman -Qql "$@" 2>/dev/null | sort -u > "$owned"
+  # strip trailing slashes so DIRECTORY entries match our abs path form; without
+  # this a package-owned dir is cp -a'd whole (recursively dragging its owned
+  # files in) and pacstrap later aborts with "exists in filesystem"
+  pacman -Qql "$@" 2>/dev/null | sed 's|/\+$||' | sort -u > "$owned"
   ( cd "$src" && find . -mindepth 1 -printf '%P\n' ) | while IFS= read -r rel; do
     local abs="${src%/}/$rel"
     abs="${abs%/}"
