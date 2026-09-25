@@ -18,6 +18,8 @@ on:
 
 permissions:
   contents: write
+  # actions:read is required by download-artifact@v4 run-id (cross-run download)
+  actions: read
 
 jobs:
   build:
