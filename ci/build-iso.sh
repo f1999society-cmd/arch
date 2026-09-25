@@ -196,6 +196,19 @@ echo "-- running Hyde installer (non-interactive flags; stdin EOF walks prompts 
 mkdir -p /run/user/1000
 chown bna:bna /run/user/1000
 chmod 700 /run/user/1000
+# Pre-answer Hyde's sddm theme prompt deterministically. install_pst.sh asks via a
+# bare `read -p` which kills install.sh under set -e when stdin hits EOF (this is
+# what ended runs 8574ce3/9af4eb7 right after the theme step). With the backup
+# marker present the whole prompt block is skipped, so extract Corners + write the
+# exact files the prompt path would have written (backup stays empty like Hyde).
+if [ ! -d /usr/share/sddm/themes/Corners ]; then
+  tar -xzf /home/bna/HyDE/Source/arcs/Sddm_Corners.tar.gz -C /usr/share/sddm/themes/
+fi
+: > /etc/sddm.conf.d/the_hyde_project.conf
+: > /etc/sddm.conf.d/backup_the_hyde_project.conf
+cp /usr/share/sddm/themes/Corners/the_hyde_project.conf /etc/sddm.conf.d/the_hyde_project.conf
+mkdir -p /usr/share/sddm/faces
+echo "sddm Corners pre-seeded (prompt will be skipped)"
 set +e
 timeout 3600 sudo -u bna -H env XDG_RUNTIME_DIR=/run/user/1000 bash -lc 'cd ~/HyDE/Scripts && ./install.sh -d -r -s -n' < /dev/null > /tmp/hyde-install.log 2>&1
 HYDE_RC=$?
