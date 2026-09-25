@@ -246,6 +246,16 @@ rm -rf /home/bna/HyDE /home/bna/.local/state/hyde/python_env
 # tens of MB to GB of dead weight; it is tmpfs-shadowed at runtime anyway (fstab)
 du -sh /home/bna/.cache 2>/dev/null || true
 rm -rf /home/bna/.cache
+# keep 5 of the 12 Hyde themes — runner SSD (~14GB) + ISO size budget; each theme
+# ships its wallpapers. Dropped ones are re-importable at runtime via themepatcher.
+KEEP_THEMES=("Catppuccin Mocha" "Catppuccin Latte" "Tokyo Night" "Rosé Pine" "Gruvbox Retro")
+if [ -d /home/bna/.config/hyde/themes ]; then
+  for t in /home/bna/.config/hyde/themes/*; do
+    base=$(basename "$t"); keep=0
+    for k in "${KEEP_THEMES[@]}"; do [ "$base" = "$k" ] && keep=1; done
+    [ "$keep" = 0 ] && rm -rf "$t" && echo "theme trimmed: $base"
+  done
+fi
 cp -a /home/bna/. "$A/home/bna/"
 
 # display manager theme written by install_pst.sh + Hyde theme archives.
@@ -309,11 +319,24 @@ EOF
 chown -R 1000:1000 "$A/home/bna"
 echo "collected. home size: $(du -sh "$A/home/bna" | cut -f1)"
 
+# ------------------------------------------------------------- 5b. disk pruning
+# GitHub-hosted runners expose ~14GB SSD total. The container's 857-package tree
+# (~7GB) was only needed so Hyde/deez could see the desktop installed — the ISO
+# packages are installed fresh by mkarchiso's pacstrap from the network. Runners
+# died at pacstrap with the container still fat (36142103152, 36140211038).
+echo "== [5b] pruning build container (free: $(df -h / | awk 'NR==2{print $4}') before) =="
+rm -rf /home/bna /tmp/bnasec-localrepo /tmp/chaotic-bootstrap /tmp/shim-* /tmp/aurbuild-*
+pacman -Sc --noconfirm >/dev/null 2>&1 || true
+KEEP='^(pacman|pacman-mirrorlist|archlinux-keyring|chaotic-keyring|chaotic-mirrorlist|archiso|arch-install-scripts|squashfs-tools|libisoburn|libburn|libisofs|e2fsprogs|dosfstools|bash|glibc|coreutils|filesystem|grep|sed|gawk|tar|gzip|xz|zstd|libarchive|curl|gpgme|libassuan|libgpg-error|npth|libgcrypt|libgpg-error|openssl|ca-certificates|ca-certificates-utils|ca-certificates-mozilla|pcre2|ncurses|readline|iana-etc|licenses|attr|acl|libcap|mpfr|gmp|libffi|expat|gdbm|perl|device-mapper|popt|json-c|lmdb|keyutils|krb5|libnsl|libverto|libssh2|libnghttp2|libpsl|util-linux|util-linux-libs|zlib|bzip2|systemd-libs|github-cli)$'
+PURGE=$(pacman -Qq 2>/dev/null | grep -vxE "$KEEP" || true)
+if [ -n "$PURGE" ]; then
+  # shellcheck disable=SC2086
+  pacman -Rdd --noconfirm $PURGE > /tmp/purge.log 2>&1 || { echo "purge had failures (tail):"; tail -5 /tmp/purge.log; }
+fi
+echo "pruned. container: $(pacman -Qq 2>/dev/null | wc -l) packages, free: $(df -h / | awk 'NR==2{print $4}')"
+
 # ------------------------------------------------------------- 6. mkarchiso
 echo "== [6] mkarchiso =="
-# free the container's package cache — the runner disk also holds the profile
-# copy and the container itself
-pacman -Sc --noconfirm >/dev/null 2>&1 || true
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(date +%s)}"
 mkarchiso -v -w "$WORK" -o "$OUT" "$PROFILE_DIR" 2>&1 | tail -60
 ISO=$(find "$OUT" -maxdepth 1 -name '*.iso' | head -1)
@@ -341,4 +364,8 @@ SUID=$(find "$CHECK/usr" -perm -4000 -type f 2>/dev/null | wc -l)
 [ "$FAIL" = 0 ] || { echo "ASSERTIONS FAILED"; exit 1; }
 
 sha256sum "$ISO" > "$ISO.sha256"
+# free the biggest disk chunk (~7GB pacstrap tree) before the boot tests —
+# qemu gets installed by boot-tests.sh and the runner only has ~14GB
+rm -rf "$WORK" /tmp/sfs-check
+echo "work tree freed. free: $(df -h / | awk 'NR==2{print $4}')"
 echo "== BUILD COMPLETE: $ISO =="

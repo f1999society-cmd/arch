@@ -20,6 +20,16 @@ ISO=$(find "$OUT" -maxdepth 1 -name '*.iso' | head -1)
 [ -n "$ISO" ] || { echo "no ISO in $OUT"; exit 1; }
 mkdir -p "$TESTS"
 
+# qemu is installed here, NOT in the tooling step: the build phase needs every
+# MB of the ~14GB runner disk, and the container purges the package tree before
+# mkarchiso. By the time tests run, the mkarchiso work tree is deleted and there
+# is room again.
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+  echo "installing qemu for boot tests"
+  pacman -Sy --noconfirm --needed qemu-desktop qemu-img edk2-ovmf > /tmp/qemu-install.log 2>&1 \
+    || { tail -20 /tmp/qemu-install.log; exit 1; }
+fi
+
 # ---- acceleration
 if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL="kvm"; else ACCEL="tcg"; fi
 echo "accel: $ACCEL"

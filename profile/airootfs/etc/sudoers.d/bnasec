@@ -1,0 +1,2 @@
+# bnasec live — wheel may sudo with its own password (bna / bnasec)
+%wheel ALL=(ALL:ALL) ALL

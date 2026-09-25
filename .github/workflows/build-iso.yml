@@ -36,7 +36,9 @@ jobs:
       - name: install build + test tooling
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed archiso git jq qemu-desktop edk2-ovmf github-cli
+          # qemu + ovmf are installed later by ci/boot-tests.sh — the build phase
+          # needs every MB of the ~14GB runner SSD
+          pacman -S --noconfirm --needed archiso git jq github-cli
 
       - name: build ISO (Hyde baked in)
         run: bash ci/build-iso.sh
