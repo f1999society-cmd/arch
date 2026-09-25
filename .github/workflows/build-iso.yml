@@ -54,6 +54,7 @@ jobs:
           cp -v "$TEST_DIR"/*.log diag/ 2>/dev/null || true
           cp -v /tmp/hyde-install.log diag/ 2>/dev/null || true
           cp -v /tmp/pkg-install.log diag/ 2>/dev/null || true
+          cp -v /tmp/purge.log diag/ 2>/dev/null || true
           ls -la "$OUT_DIR" || true
 
       - name: upload diagnostics artifact

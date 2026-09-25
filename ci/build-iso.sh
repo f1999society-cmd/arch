@@ -358,6 +358,7 @@ licenses
 filesystem
 perl
 gdbm
+gcc-libs
 EOF
 KEEP="^$(sort -u /tmp/keep-pkgs.txt | grep -v '^$' | paste -sd'|')$"
 echo "keep-closure: $(sort -u /tmp/keep-pkgs.txt | grep -cv '^$') packages"
@@ -372,7 +373,7 @@ if ! command -v pacman >/dev/null 2>&1; then
 fi
 pacman -Sy --noconfirm >/dev/null 2>&1 || true
 pacman -S --noconfirm --needed pacman findutils mtools archiso arch-install-scripts \
-  squashfs-tools libisoburn e2fsprogs dosfstools libarchive curl gpgme github-cli \
+  squashfs-tools libisoburn e2fsprogs dosfstools libarchive curl gpgme github-cli gcc-libs \
   >> /tmp/purge.log 2>&1 || { echo "essential reinstall failed:"; tail -10 /tmp/purge.log; exit 1; }
 if ! command -v mkarchiso >/dev/null 2>&1 || ! command -v find >/dev/null 2>&1 \
    || ! command -v mmd >/dev/null 2>&1; then
