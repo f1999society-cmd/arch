@@ -27,28 +27,10 @@ test "$(id -u)" = 0 || { echo "must run as root (container)"; exit 1; }
 . /etc/os-release
 echo "host: $PRETTY_NAME"
 pacman -Sy --noconfirm >/dev/null
-pacman -Q archiso mkinitcpio-archiso >/dev/null 2>&1 || pacman -S --noconfirm --needed archiso >/dev/null
-mkarchiso --help 2>&1 | head -2 || true
+pacman -Q archiso >/dev/null 2>&1 || pacman -S --noconfirm --needed archiso >/dev/null
 
-# ------------------------------------------------------------- 1. package validation
-echo "== [1] validating packages.x86_64 against configured repos =="
-PKGS=$(grep -vE '^\s*#|^\s*$' "$PROFILE_DIR/packages.x86_64")
-MISSING=()
-for p in $PKGS; do
-  if ! pacman -Si "$p" >/dev/null 2>&1; then
-    MISSING+=("$p")
-  fi
-done
-if [ "${#MISSING[@]}" -gt 0 ]; then
-  echo "MISSING PACKAGES (not in any configured repo):"
-  printf '  %s\n' "${MISSING[@]}"
-  echo "Fix packages.x86_64 or add the repo that provides them."
-  exit 1
-fi
-echo "all $(echo "$PKGS" | wc -w) packages resolve in repos"
-
-# ------------------------------------------------------------- 2. chaotic-aur bootstrap
-echo "== [2] bootstrapping chaotic-aur in the container =="
+# ------------------------------------------------------------- 1. chaotic-aur bootstrap
+echo "== [1] bootstrapping chaotic-aur in the container =="
 CHAOTIC_DIR=/tmp/chaotic-bootstrap
 mkdir -p "$CHAOTIC_DIR"; cd "$CHAOTIC_DIR"
 for pkg in chaotic-keyring chaotic-mirrorlist; do
@@ -65,9 +47,48 @@ EOF
 pacman -Sy --noconfirm >/dev/null
 pacman -Si chaotic-keyring >/dev/null && echo "chaotic-aur active"
 
+# ------------------------------------------------------------- 2. package validation
+echo "== [2] validating packages.x86_64 against configured repos =="
+cd - >/dev/null
+PKGS=$(grep -vE '^\s*#|^\s*$' "$PROFILE_DIR/packages.x86_64")
+MISSING=()
+for p in $PKGS; do
+  if ! pacman -Si "$p" >/dev/null 2>&1; then
+    MISSING+=("$p")
+  fi
+done
+if [ "${#MISSING[@]}" -gt 0 ]; then
+  echo "not in official+chaotic repos, building locally: ${MISSING[*]}"
+  # build the stragglers with paru (from chaotic), then expose them to pacstrap
+  # through a throwaway local [bnasec-local] repo in the BUILD pacman.conf only
+  id builduser >/dev/null 2>&1 || useradd -m builduser
+  echo 'builduser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/98-builduser
+  chmod 440 /etc/sudoers.d/98-builduser
+  pacman -S --noconfirm --needed paru >/dev/null
+  sudo -u builduser paru -S --noconfirm --needed --removemake "${MISSING[@]}" > /tmp/aur-build.log 2>&1 || { tail -40 /tmp/aur-build.log; exit 1; }
+  LOCALREPO=/tmp/bnasec-localrepo
+  mkdir -p "$LOCALREPO"
+  BUILT=()
+  for p in "${MISSING[@]}"; do
+    f=$(ls /var/cache/pacman/pkg/${p}-*.pkg.tar.zst 2>/dev/null | sort -V | tail -n1)
+    [ -n "$f" ] && BUILT+=("$f")
+  done
+  repo-add "$LOCALREPO/bnasec-local.db.tar.gz" "${BUILT[@]}" >/dev/null
+  grep -q '^\[bnasec-local\]' "$PROFILE_DIR/pacman.conf" || cat >> "$PROFILE_DIR/pacman.conf" <<EOF
+
+[bnasec-local]
+Server = file://${LOCALREPO}
+SigLevel = Never
+EOF
+  pacman -Sy --noconfirm >/dev/null
+  for p in "${MISSING[@]}"; do
+    pacman -Si "$p" >/dev/null 2>&1 || { echo "STILL UNRESOLVED: $p"; exit 1; }
+  done
+fi
+echo "all $(echo "$PKGS" | wc -w) packages resolve in repos"
+
 # ------------------------------------------------------------- 3. install full list
 echo "== [3] installing the full package list into the container =="
-cd - >/dev/null
 pacman -S --noconfirm --needed $(grep -vE '^\s*#|^\s*$' "$PROFILE_DIR/packages.x86_64") > /tmp/pkg-install.log 2>&1 || { tail -30 /tmp/pkg-install.log; exit 1; }
 locale-gen
 echo "container now has: $(pacman -Qq | wc -l) packages"
@@ -149,8 +170,9 @@ if [ -d /usr/local/share/icons ]; then
 fi
 
 # pacman config for the live system + chaotic mirrorlist
+# (strip the build-only [bnasec-local] file:// repo — it does not exist at runtime)
 mkdir -p "$A/etc/pacman.d"
-cp "$PROFILE_DIR/pacman.conf" "$A/etc/pacman.conf"
+sed '/^\[bnasec-local\]/,+3d' "$PROFILE_DIR/pacman.conf" > "$A/etc/pacman.conf"
 cp /etc/pacman.d/chaotic-mirrorlist "$A/etc/pacman.d/chaotic-mirrorlist"
 
 # locale archive (locale-gen ran in the container)
