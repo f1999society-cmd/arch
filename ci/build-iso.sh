@@ -221,7 +221,9 @@ tail -40 /tmp/hyde-install.log
 # wallpaper cache, sddm, migrations, services) finished by then; the deploy_failed
 # and theme_failed exits fire BEFORE that banner. So gate on the completion marker:
 # present -> accept (a nonzero rc can only come from the reboot read at EOF).
-if ! grep -q "Installation :: COMPLETED" /tmp/hyde-install.log; then
+# print_log emits ANSI codes between the words, so match on the bare "COMPLETED!"
+# token (unique to the success banner in install.sh) instead of the full phrase.
+if ! grep -q "COMPLETED!" /tmp/hyde-install.log; then
   echo "!! Hyde install did not complete — last 80 lines of log:"
   tail -80 /tmp/hyde-install.log
   exit 1
