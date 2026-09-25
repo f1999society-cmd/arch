@@ -216,11 +216,17 @@ HYDE_RC=$?
 set -e
 echo "hyde installer rc=$HYDE_RC"
 tail -40 /tmp/hyde-install.log
-if [ "$HYDE_RC" != 0 ]; then
-  echo "!! Hyde install failed — last 80 lines of log:"
+# install.sh's FINAL prompt ("Do you want to reboot?") is a bare `read` that dies
+# on EOF — after "Installation :: COMPLETED!". Everything substantive (dots, themes,
+# wallpaper cache, sddm, migrations, services) finished by then; the deploy_failed
+# and theme_failed exits fire BEFORE that banner. So gate on the completion marker:
+# present -> accept (a nonzero rc can only come from the reboot read at EOF).
+if ! grep -q "Installation :: COMPLETED" /tmp/hyde-install.log; then
+  echo "!! Hyde install did not complete — last 80 lines of log:"
   tail -80 /tmp/hyde-install.log
   exit 1
 fi
+[ "$HYDE_RC" = 0 ] || echo "NOTE: rc=$HYDE_RC is the EOF'd final reboot prompt read — installation completed, ignoring"
 
 # ------------------------------------------------------------- 5. collect into profile
 echo "== [5] collecting Hyde output into the profile =="
