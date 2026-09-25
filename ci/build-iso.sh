@@ -176,6 +176,9 @@ EOF
 chmod +x /usr/bin/systemctl
 ls -la /usr/bin/systemctl /usr/bin/systemctl.real
 
+# containers get finicky about ownership (actions mounts, sudo env) — whitelist
+chown -R bna:bna /home/bna
+sudo -u bna -H git config --global --add safe.directory '*'
 sudo -u bna -H git clone --depth 1 "$HYDE_REPO" /home/bna/HyDE 2>&1 | tail -1
 HYDE_HEAD=$(git -C /home/bna/HyDE rev-parse --short HEAD)
 echo "Hyde @ $HYDE_HEAD"
