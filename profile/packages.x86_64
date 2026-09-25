@@ -13,6 +13,8 @@ linux
 linux-firmware
 mkinitcpio
 mkinitcpio-archiso
+# BIOS boot loader (profiledef.sh: bios.syslinux) — mkarchiso validates its presence
+syslinux
 e2fsprogs
 zram-generator
 sudo
