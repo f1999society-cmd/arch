@@ -55,7 +55,6 @@ jobs:
           cp -v /tmp/hyde-install.log diag/ 2>/dev/null || true
           cp -v /tmp/pkg-install.log diag/ 2>/dev/null || true
           cp -v /tmp/purge.log diag/ 2>/dev/null || true
-          cp -v /tmp/pacman-static.log diag/ 2>/dev/null || true
           cp -v /tmp/keep-pkgs.txt diag/ 2>/dev/null || true
           cp -v /tmp/mkarchiso.log diag/ 2>/dev/null || true
           ls -la "$OUT_DIR" || true

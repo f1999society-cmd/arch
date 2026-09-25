@@ -50,13 +50,10 @@ Include = /etc/pacman.d/chaotic-mirrorlist
 EOF
 pacman -Sy --noconfirm >/dev/null
 pacman -Si chaotic-keyring >/dev/null && echo "chaotic-aur active"
-# static pacman NOW, while the container is still healthy: it survives the
-# step-[5b] purge (added to the keep floor) and its -S is immune to any shared-
-# library damage the purge causes — run 36160555180 proved the pre-purge install
-# alone is too late (it failed invisibly and dynamic pacman then broke)
-pacman -S --noconfirm --needed pacman-static > /tmp/pacman-static.log 2>&1 \
-  || { echo "WARN: pacman-static install failed (continuing):"; tail -5 /tmp/pacman-static.log; }
-command -v pacman-static >/dev/null && echo "pacman-static armed"
+# NOTE: pacman-static insurance removed — chaotic-aur dropped the package
+# ('target not found', run b6e2f49; verified absent from the garuda repo
+# listing). Post-purge recovery relies on the keep-closure + tool_ok heal
+# passes with dynamic pacman, which run b6e2f49 proved work end-to-end.
 
 # ------------------------------------------------------------- 2. package validation
 echo "== [2] validating packages.x86_64 against configured repos =="
@@ -349,7 +346,7 @@ KEEP_BINS=(pacman pacstrap arch-chroot mkarchiso mksquashfs unsquashfs xorriso \
   # existed yet could not EXECUTE, and the unguarded 'pacman-key --init' died
   # silently under set -e right after '== [6] mkarchiso ==' (run 36160555180).
   # Listing the binaries here ldd-scans them into the closure.
-  gpg gpgv dirmngr gpg-agent keyboxd pacman-conf pacman-static)
+  gpg gpgv dirmngr gpg-agent keyboxd pacman-conf)
 for b in "${KEEP_BINS[@]}"; do
   p=$(command -v "$b" 2>/dev/null) || continue
   pacman -Qoq "$p" >> /tmp/keep-pkgs.txt 2>/dev/null || true
@@ -384,14 +381,12 @@ perl
 gdbm
 gcc-libs
 libseccomp
-pacman-static
 EOF
 KEEP="^$(sort -u /tmp/keep-pkgs.txt | grep -v '^$' | paste -sd'|')$"
 echo "keep-closure: $(sort -u /tmp/keep-pkgs.txt | grep -cv '^$') packages"
-# static pacman BEFORE the purge: post-purge pacman operations must not depend on
-# the container's shared-library state (the purge keeps breaking dynamic pacman —
-# libseccomp run 36146550749, libstdc++ run 36149510273 — despite the closure).
-pacman -S --noconfirm --needed pacman-static >> /tmp/purge.log 2>&1 || echo "WARN: pacman-static unavailable, falling back to dynamic pacman"
+# (former pacman-static pre-purge install removed — package gone from chaotic;
+# the keep-closure below keeps dynamic pacman alive through the purge, proven
+# in run b6e2f49 where post-purge -Sy and reinstall all succeeded)
 # rescue the libs the runner's node + pacman cannot live without — whatever the
 # purge removes gets physically restored right after, then the reinstall below
 # repairs the DB/files consistency
@@ -406,9 +401,10 @@ if [ -n "$PURGE" ]; then
 fi
 cp -a "$RESCUE/." /usr/lib/ 2>/dev/null || true
 /sbin/ldconfig 2>/dev/null || true
-# post-purge package ops go through pacman-static (immune to removed libraries)
-PAC=pacman-static
-command -v pacman-static >/dev/null 2>&1 || { PAC=pacman; command -v pacman >/dev/null 2>&1 || { echo "!! no pacman at all — cannot recover"; exit 1; }; }
+# post-purge package ops go through dynamic pacman — the keep-closure protects
+# its libraries through the purge (pacman-static was dropped from chaotic-aur)
+PAC=pacman
+command -v pacman >/dev/null 2>&1 || { echo "!! no pacman — cannot recover"; exit 1; }
 echo "post-purge package manager: $PAC"
 $PAC -Sy --noconfirm >/dev/null 2>&1 || true
 $PAC -S --noconfirm --needed pacman findutils mtools archiso arch-install-scripts \
@@ -420,11 +416,27 @@ $PAC -S --noconfirm --needed pacman findutils mtools archiso arch-install-script
 # verify FUNCTIONALLY: every tool must execute, not merely exist. Anything that
 # fails gets force-reextracted (-dd: --dd is not a pacman option, -dd is) —
 # critical lib packages included, since a broken DEP breaks a kept binary too.
+# exec probe: a tool is healthy if it RUNS — rc 126/127 means loader/PATH
+# failure (missing shared lib after the purge). rc 1 from a script that merely
+# has no --version flag (pacstrap, mkarchiso) is HEALTHY — run b6e2f49
+# false-flagged healthy pacstrap that way and burned 2 heal passes for nothing.
+tool_ok() {
+  local rc
+  "$1" --version >/dev/null 2>&1 && return 0
+  rc=$?
+  [ "$rc" -eq 126 ] && return 1
+  [ "$rc" -eq 127 ] && return 1
+  "$1" --help >/dev/null 2>&1 && return 0
+  rc=$?
+  [ "$rc" -eq 126 ] && return 1
+  [ "$rc" -eq 127 ] && return 1
+  return 0
+}
 heal_pass() {
   local broken=0
   for b in pacman pacstrap mkarchiso mksquashfs xorriso gpg curl gh find mmd bsdtar; do
     command -v "$b" >/dev/null 2>&1 || { echo "!! $b gone entirely"; broken=1; continue; }
-    if ! "$b" --version >/dev/null 2>&1; then echo "!! $b does not execute"; broken=1; fi
+    tool_ok "$b" || { echo "!! $b does not execute"; broken=1; }
   done
   [ "$broken" = 1 ] || return 0
   echo "heal: force-reextracting critical toolchain"
@@ -434,7 +446,7 @@ heal_pass() {
   /sbin/ldconfig 2>/dev/null || true
   local still=0
   for b in pacman pacstrap mkarchiso mksquashfs xorriso gpg curl gh find mmd bsdtar; do
-    "$b" --version >/dev/null 2>&1 || { echo "!! $b STILL broken after heal"; still=1; }
+    tool_ok "$b" || { echo "!! $b STILL broken after heal"; still=1; }
   done
   return $still
 }
