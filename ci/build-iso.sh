@@ -62,16 +62,47 @@ for p in $PKGS; do
   fi
 done
 if [ "${#MISSING[@]}" -gt 0 ]; then
-  echo "not in official+chaotic repos, building locally: ${MISSING[*]}"
-  # clone from AUR + makepkg, expose to pacstrap via a throwaway [bnasec-local]
-  # repo appended to BOTH the container and build pacman.conf (runtime copy strips it)
   id builduser >/dev/null 2>&1 || useradd -m builduser
   echo 'builduser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/98-builduser
   chmod 440 /etc/sudoers.d/98-builduser
   LOCALREPO=/tmp/bnasec-localrepo
   rm -rf "$LOCALREPO"; mkdir -p "$LOCALREPO"
-  BUILT=()
-  for p in "${MISSING[@]}"; do
+  ALLBUILT=()
+
+  # (a) name-shims: packages Hyde references by a name that only exists under a
+  #     -git suffix in chaotic. A tiny empty package under the expected name keeps
+  #     deez/paru name-resolution happy while the real files come from the -git pkg.
+  SHIM_PKGS=(hyprquery)   # shim name -> real implementation is <name>-git (hyq binary)
+  for p in "${SHIM_PKGS[@]}"; do
+    [[ " ${MISSING[*]} " == *" $p "* ]] || continue
+    SD="/tmp/shim-$p"; rm -rf "$SD"; mkdir -p "$SD/$p"
+    cat > "$SD/$p/PKGBUILD" <<PKGEOF
+pkgname=$p
+pkgver=1.0
+pkgrel=1
+pkgdesc="bnasec shim: name placeholder, real files from $p-git"
+arch=('any')
+license=('MIT')
+depends=("$p-git")
+package() { :; }
+PKGEOF
+    chown -R builduser: "$SD"
+    ( cd "$SD/$p" && sudo -u builduser makepkg -f --noconfirm --noprogressbar ) > "/tmp/shim-$p.log" 2>&1 || { echo "shim build failed for $p:"; tail -20 "/tmp/shim-$p.log"; exit 1; }
+    mv "$SD/$p/$p-1.0-1-any.pkg.tar.zst" "$LOCALREPO/"
+    ALLBUILT+=("$LOCALREPO/$p-1.0-1-any.pkg.tar.zst")
+    echo "built shim: $p"
+  done
+  # drop shim names from MISSING (they are resolved now)
+  NEW=(); for p in "${MISSING[@]}"; do
+    skip=0
+    for s in "${SHIM_PKGS[@]}"; do [ "$s" = "$p" ] && skip=1; done
+    [ "$skip" = 0 ] && NEW+=("$p")
+  done
+  MISSING=("${NEW[@]:-}")
+
+  # (b) generic AUR build for anything still missing
+  for p in "${MISSING[@]:-}"; do
+    [ -z "$p" ] && continue
     BD="/tmp/aurbuild-$p"
     rm -rf "$BD"; mkdir -p "$BD"; chown builduser: "$BD"
     if ! sudo -u builduser git clone --depth 1 "https://aur.archlinux.org/${p}.git" "$BD" > "/tmp/aurbuild-$p.log" 2>&1; then
@@ -81,20 +112,23 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
     PKGFILE=$(ls "$BD"/*.pkg.tar.zst 2>/dev/null | head -n1)
     [ -n "$PKGFILE" ] || { echo "no package produced for $p:"; tail -20 "/tmp/aurbuild-$p.log"; exit 1; }
     mv "$PKGFILE" "$LOCALREPO/"
-    BUILT+=("$LOCALREPO/$(basename "$PKGFILE")")
+    ALLBUILT+=("$LOCALREPO/$(basename "$PKGFILE")")
     echo "built locally: $(basename "$PKGFILE")"
   done
-  repo-add "$LOCALREPO/bnasec-local.db.tar.gz" "${BUILT[@]}" > /tmp/repo-add.log 2>&1 || { cat /tmp/repo-add.log; exit 1; }
-  for conf in /etc/pacman.conf "$PROFILE_DIR/pacman.conf"; do
-    grep -q '^\[bnasec-local\]' "$conf" || cat >> "$conf" <<EOF
+
+  if [ ${#ALLBUILT[@]} -gt 0 ]; then
+    repo-add "$LOCALREPO/bnasec-local.db.tar.gz" "${ALLBUILT[@]}" > /tmp/repo-add.log 2>&1 || { cat /tmp/repo-add.log; exit 1; }
+    for conf in /etc/pacman.conf "$PROFILE_DIR/pacman.conf"; do
+      grep -q '^\[bnasec-local\]' "$conf" || cat >> "$conf" <<EOF
 
 [bnasec-local]
 Server = file://${LOCALREPO}
 SigLevel = Never
 EOF
-  done
-  pacman -Sy --noconfirm >/dev/null
-  for p in "${MISSING[@]}"; do
+    done
+    pacman -Sy --noconfirm >/dev/null
+  fi
+  for p in $PKGS; do
     pacman -Si "$p" >/dev/null 2>&1 || { echo "STILL UNRESOLVED: $p"; exit 1; }
   done
 fi
