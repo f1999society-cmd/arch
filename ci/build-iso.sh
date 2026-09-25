@@ -327,14 +327,46 @@ echo "collected. home size: $(du -sh "$A/home/bna" | cut -f1)"
 echo "== [5b] pruning build container (free: $(df -h / | awk 'NR==2{print $4}') before) =="
 rm -rf /home/bna /tmp/bnasec-localrepo /tmp/chaotic-bootstrap /tmp/shim-* /tmp/aurbuild-*
 pacman -Sc --noconfirm >/dev/null 2>&1 || true
-KEEP='^(pacman|pacman-mirrorlist|archlinux-keyring|chaotic-keyring|chaotic-mirrorlist|archiso|arch-install-scripts|squashfs-tools|libisoburn|libburn|libisofs|e2fsprogs|dosfstools|findutils|mtools|bash|glibc|coreutils|filesystem|grep|sed|gawk|tar|gzip|xz|zstd|libarchive|curl|gpgme|libassuan|libgpg-error|npth|libgcrypt|libgpg-error|openssl|ca-certificates|ca-certificates-utils|ca-certificates-mozilla|pcre2|ncurses|readline|iana-etc|licenses|attr|acl|libcap|mpfr|gmp|libffi|expat|gdbm|perl|device-mapper|popt|json-c|lmdb|keyutils|krb5|libnsl|libverto|libssh2|libnghttp2|libpsl|util-linux|util-linux-libs|zlib|bzip2|systemd-libs|github-cli)$'
+
+# Dynamic keep-closure: every binary the post-purge phases need (mkarchiso,
+# pacstrap, xorriso, mksquashfs, gh, ...) plus the shared libraries each one
+# links, mapped to their owning packages via pacman -Qoq. A static list bit us:
+# purging libseccomp broke pacman itself ('error while loading shared libraries:
+# libseccomp.so.2', run 36146550749).
+rm -f /tmp/keep-pkgs.txt
+KEEP_BINS=(pacman pacstrap arch-chroot mkarchiso mksquashfs unsquashfs xorriso \
+  bsdtar find mmd mcopy e2fsck mkfs.ext4 mkfs.vfat gh curl bash sha256sum \
+  sed grep awk tar gzip openssl unshare mount umount)
+for b in "${KEEP_BINS[@]}"; do
+  p=$(command -v "$b" 2>/dev/null) || continue
+  pacman -Qoq "$p" >> /tmp/keep-pkgs.txt 2>/dev/null || true
+  for lib in $(ldd "$p" 2>/dev/null | awk '$3 ~ /^\// {print $3}'); do
+    pacman -Qoq "$lib" >> /tmp/keep-pkgs.txt 2>/dev/null || true
+  done
+done
+# static floor: keyrings/mirrors/CAs for the post-purge pacman -S, base metadata
+cat >> /tmp/keep-pkgs.txt <<'EOF'
+pacman-mirrorlist
+archlinux-keyring
+chaotic-keyring
+chaotic-mirrorlist
+ca-certificates
+ca-certificates-utils
+ca-certificates-mozilla
+iana-etc
+licenses
+filesystem
+perl
+gdbm
+EOF
+KEEP="^$(sort -u /tmp/keep-pkgs.txt | grep -v '^$' | paste -sd'|')$"
+echo "keep-closure: $(sort -u /tmp/keep-pkgs.txt | grep -cv '^$') packages"
 PURGE=$(pacman -Qq 2>/dev/null | grep -vxE "$KEEP" || true)
 if [ -n "$PURGE" ]; then
   # shellcheck disable=SC2086
   pacman -Rdd --noconfirm $PURGE > /tmp/purge.log 2>&1 || { echo "purge had failures (tail):"; tail -5 /tmp/purge.log; }
 fi
-# self-verify: mkarchiso needs find/mmd/mcopy/pacstrap/xorriso/mksquashfs on the HOST.
-# force-reinstall the whole essential set (no-ops for whatever survived)
+# self-verify: pacman alive, and the essential set fully installed (no-ops otherwise)
 if ! command -v pacman >/dev/null 2>&1; then
   echo "!! pacman vanished in the purge — cannot recover in-place"; exit 1
 fi
@@ -342,6 +374,10 @@ pacman -Sy --noconfirm >/dev/null 2>&1 || true
 pacman -S --noconfirm --needed pacman findutils mtools archiso arch-install-scripts \
   squashfs-tools libisoburn e2fsprogs dosfstools libarchive curl gpgme github-cli \
   >> /tmp/purge.log 2>&1 || { echo "essential reinstall failed:"; tail -10 /tmp/purge.log; exit 1; }
+if ! command -v mkarchiso >/dev/null 2>&1 || ! command -v find >/dev/null 2>&1 \
+   || ! command -v mmd >/dev/null 2>&1; then
+  echo "!! essential tools missing after purge:"; tail -10 /tmp/purge.log; exit 1
+fi
 echo "pruned. container: $(pacman -Qq 2>/dev/null | wc -l) packages, free: $(df -h / | awk 'NR==2{print $4}')"
 
 # ------------------------------------------------------------- 6. mkarchiso
