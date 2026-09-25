@@ -27,10 +27,14 @@ mkdir -p "$TESTS"
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
   echo "installing qemu for boot tests"
   # prefer pacman-static: the build-phase purge can leave the dynamic pacman's
-  # shared-library closure incomplete
+  # shared-library closure incomplete. --overwrite: the purge phase rescues
+  # libstdc++.so.6 files into /usr/lib while the chaotic 'libstdc++' dup stays
+  # uninstalled — a dep of the qemu install chain then trips 'exists in
+  # filesystem' (run 36176573130); the files are identical, just overwrite.
   PAC=pacman-static
   command -v pacman-static >/dev/null 2>&1 || PAC=pacman
-  $PAC -Sy --noconfirm --needed qemu-desktop qemu-img edk2-ovmf > /tmp/qemu-install.log 2>&1 \
+  $PAC -Sy --noconfirm --needed --overwrite '/usr/lib/libstdc++*' \
+    qemu-desktop qemu-img edk2-ovmf > /tmp/qemu-install.log 2>&1 \
     || { tail -20 /tmp/qemu-install.log; exit 1; }
 fi
 

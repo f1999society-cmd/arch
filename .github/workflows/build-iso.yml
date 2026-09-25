@@ -7,6 +7,14 @@ on:
         description: "skip QEMU boot tests (build only)"
         required: false
         default: "false"
+      reuse_iso:
+        description: "skip build, test the ISO artifact from a previous run"
+        required: false
+        default: "false"
+      source_run_id:
+        description: "run id that uploaded bnasec-iso-untested (required when reuse_iso=true)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -41,7 +49,17 @@ jobs:
           pacman -S --noconfirm --needed archiso git jq github-cli
 
       - name: build ISO (Hyde baked in)
+        if: ${{ inputs.reuse_iso != 'true' }}
         run: bash ci/build-iso.sh
+
+      - name: reuse ISO artifact from previous run
+        if: ${{ inputs.reuse_iso == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: bnasec-iso-untested
+          path: ${{ env.OUT_DIR }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: boot tests (BIOS / persistence proof / RAM-only / UEFI)
         if: ${{ github.event.inputs.skip_tests != 'true' }}
@@ -117,9 +135,9 @@ jobs:
 
           ## Flash
           \`\`\`bash
-          sha256sum bnasec-arch-1.2.0-amd64.iso
+          sha256sum bnasec-arch-1.2.0-x86_64.iso
           # expected: $SHA
-          sudo dd if=bnasec-arch-1.2.0-amd64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+          sudo dd if=bnasec-arch-1.2.0-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
           \`\`\`
           ISO size: $SIZE. A 4 GB+ stick is enough; the rest becomes persistence.
           EOF
