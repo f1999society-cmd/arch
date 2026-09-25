@@ -136,8 +136,9 @@ echo "all $(echo "$PKGS" | wc -w) packages resolve in repos"
 # ------------------------------------------------------------- 3. install full list
 echo "== [3] installing the full package list into the container =="
 # qemu-desktop (installed by the workflow for boot tests) drags in jack2, which
-# conflicts with pipewire-jack — evict it so the pipewire stack wins the provider
-pacman -R --noconfirm --nosave jack2 > /dev/null 2>&1 || true
+# conflicts with pipewire-jack — evict it (dd: qemu-audio-jack depends on it but
+# we do not care about qemu audio in this throwaway container)
+pacman -Rdd --noconfirm --nosave jack2 > /dev/null 2>&1 || true
 pacman -S --noconfirm --needed pipewire-jack > /tmp/pkg-install.log 2>&1 || { tail -20 /tmp/pkg-install.log; exit 1; }
 pacman -S --noconfirm --needed $(grep -vE '^\s*#|^\s*$' "$PROFILE_DIR/packages.x86_64" | grep -vx pipewire-jack) >> /tmp/pkg-install.log 2>&1 || { tail -30 /tmp/pkg-install.log; exit 1; }
 locale-gen
