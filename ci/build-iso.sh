@@ -50,6 +50,13 @@ Include = /etc/pacman.d/chaotic-mirrorlist
 EOF
 pacman -Sy --noconfirm >/dev/null
 pacman -Si chaotic-keyring >/dev/null && echo "chaotic-aur active"
+# static pacman NOW, while the container is still healthy: it survives the
+# step-[5b] purge (added to the keep floor) and its -S is immune to any shared-
+# library damage the purge causes — run 36160555180 proved the pre-purge install
+# alone is too late (it failed invisibly and dynamic pacman then broke)
+pacman -S --noconfirm --needed pacman-static > /tmp/pacman-static.log 2>&1 \
+  || { echo "WARN: pacman-static install failed (continuing):"; tail -5 /tmp/pacman-static.log; }
+command -v pacman-static >/dev/null && echo "pacman-static armed"
 
 # ------------------------------------------------------------- 2. package validation
 echo "== [2] validating packages.x86_64 against configured repos =="
@@ -336,7 +343,13 @@ pacman -Sc --noconfirm >/dev/null 2>&1 || true
 rm -f /tmp/keep-pkgs.txt
 KEEP_BINS=(pacman pacstrap arch-chroot mkarchiso mksquashfs unsquashfs xorriso \
   bsdtar find mmd mcopy e2fsck mkfs.ext4 mkfs.vfat gh curl bash sha256sum \
-  sed grep awk tar gzip openssl unshare mount umount)
+  sed grep awk tar gzip openssl unshare mount umount \
+  # gnupg runtime: 'gnupg' alone in the floor keeps the binaries but NOT their
+  # libs (libgcrypt/libgpg-error/libassuan/libksba/npth) — after the purge gpg
+  # existed yet could not EXECUTE, and the unguarded 'pacman-key --init' died
+  # silently under set -e right after '== [6] mkarchiso ==' (run 36160555180).
+  # Listing the binaries here ldd-scans them into the closure.
+  gpg gpgv dirmngr gpg-agent keyboxd pacman-conf pacman-static)
 for b in "${KEEP_BINS[@]}"; do
   p=$(command -v "$b" 2>/dev/null) || continue
   pacman -Qoq "$p" >> /tmp/keep-pkgs.txt 2>/dev/null || true
@@ -370,6 +383,8 @@ filesystem
 perl
 gdbm
 gcc-libs
+libseccomp
+pacman-static
 EOF
 KEEP="^$(sort -u /tmp/keep-pkgs.txt | grep -v '^$' | paste -sd'|')$"
 echo "keep-closure: $(sort -u /tmp/keep-pkgs.txt | grep -cv '^$') packages"
@@ -399,19 +414,36 @@ $PAC -Sy --noconfirm >/dev/null 2>&1 || true
 $PAC -S --noconfirm --needed pacman findutils mtools archiso arch-install-scripts \
   squashfs-tools libisoburn e2fsprogs dosfstools libarchive curl gpgme github-cli gcc-libs gnupg \
   >> /tmp/purge.log 2>&1 || { echo "essential reinstall failed:"; tail -10 /tmp/purge.log; exit 1; }
-# the purge/reinstall window has repeatedly left libstdc++/libseccomp files gone
-# while the DB still claims them installed — force-reextract (-dd, no version
-# check) so the FILES are guaranteed back on disk
-$PAC -S --noconfirm --dd gcc-libs libseccomp >> /tmp/purge.log 2>&1 \
-  || echo "WARN: forced lib reinstall had failures"
-if ! command -v mkarchiso >/dev/null 2>&1 || ! command -v find >/dev/null 2>&1 \
-   || ! command -v mmd >/dev/null 2>&1; then
-  echo "!! essential tools missing after purge:"; tail -10 /tmp/purge.log; exit 1
-fi
+# overlap repair: chaotic dup packages (e.g. 'libstdc++') share FILES with kept
+# packages — removing the dup physically deletes the file while the kept owner
+# (gcc-libs) still claims it in its DB (run 36160555180). The DB check lies, so
+# verify FUNCTIONALLY: every tool must execute, not merely exist. Anything that
+# fails gets force-reextracted (-dd: --dd is not a pacman option, -dd is) —
+# critical lib packages included, since a broken DEP breaks a kept binary too.
+heal_pass() {
+  local broken=0
+  for b in pacman pacstrap mkarchiso mksquashfs xorriso gpg curl gh find mmd bsdtar; do
+    command -v "$b" >/dev/null 2>&1 || { echo "!! $b gone entirely"; broken=1; continue; }
+    if ! "$b" --version >/dev/null 2>&1; then echo "!! $b does not execute"; broken=1; fi
+  done
+  [ "$broken" = 1 ] || return 0
+  echo "heal: force-reextracting critical toolchain"
+  $PAC -S --noconfirm -dd gcc-libs libseccomp libgcrypt libgpg-error libassuan \
+    libksba npth sqlite pacman archiso gnupg squashfs-tools libisoburn >> /tmp/purge.log 2>&1 \
+    || { echo "!! heal reinstall failed:"; tail -8 /tmp/purge.log; return 1; }
+  /sbin/ldconfig 2>/dev/null || true
+  local still=0
+  for b in pacman pacstrap mkarchiso mksquashfs xorriso gpg curl gh find mmd bsdtar; do
+    "$b" --version >/dev/null 2>&1 || { echo "!! $b STILL broken after heal"; still=1; }
+  done
+  return $still
+}
+heal_pass || heal_pass || { echo "!! tools broken after 2 heal passes:"; tail -15 /tmp/purge.log; exit 1; }
+echo "toolchain functional after purge"
 # diagnostics for the purge side-effects
 ls -l /usr/lib/libstdc++.so.6 >/dev/null 2>&1 && echo "libstdc++ present" || echo "!! libstdc++.so.6 MISSING after purge"
 ls -l /usr/lib/libseccomp.so.2 >/dev/null 2>&1 && echo "libseccomp present" || echo "!! libseccomp.so.2 MISSING after purge"
-command -v gpg >/dev/null 2>&1 && echo "gpg present" || echo "!! gpg MISSING after purge"
+gpg --version >/dev/null 2>&1 && echo "gpg functional" || echo "!! gpg not functional after purge"
 echo "pruned. container: $(pacman -Qq 2>/dev/null | wc -l) packages, free: $(df -h / | awk 'NR==2{print $4}')"
 
 # ------------------------------------------------------------- 6. mkarchiso
@@ -424,8 +456,8 @@ rm -rf /var/cache/pacman/pkg/*
 # error-28 rot) — /etc/pacman.d/gnupg written back then fails every signature
 # check with 'invalid or corrupted package (PGP signature)'. Fresh populate.
 rm -rf /etc/pacman.d/gnupg
-pacman-key --init >/dev/null 2>&1
-pacman-key --populate archlinux chaotic 2>&1 | tail -3
+pacman-key --init 2>&1 | tail -2 || { echo "!! pacman-key --init failed:"; tail -5 /tmp/purge.log; exit 1; }
+pacman-key --populate archlinux chaotic 2>&1 | tail -3 || { echo "!! pacman-key --populate failed"; exit 1; }
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(date +%s)}"
 mkarchiso -v -w "$WORK" -o "$OUT" "$PROFILE_DIR" > /tmp/mkarchiso.log 2>&1 &
 MKPID=$!
