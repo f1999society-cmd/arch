@@ -266,9 +266,13 @@ mkdir -p "$A/etc/pacman.d"
 sed '/^\[bnasec-local\]/,+3d' "$PROFILE_DIR/pacman.conf" > "$A/etc/pacman.conf"
 cp /etc/pacman.d/chaotic-mirrorlist "$A/etc/pacman.d/chaotic-mirrorlist"
 
-# locale archive (locale-gen ran in the container)
+# locale data (locale-gen ran in the container). Depending on the glibc build the
+# compiled locales live either in a monolithic locale-archive or in per-locale
+# directories under /usr/lib/locale (current Arch containers: directories, no
+# archive) — copy whatever is there.
 mkdir -p "$A/usr/lib/locale"
-cp /usr/lib/locale/locale-archive "$A/usr/lib/locale/locale-archive"
+cp -a /usr/lib/locale/. "$A/usr/lib/locale/"
+echo "locale data: $(du -sh "$A/usr/lib/locale" | cut -f1)"
 
 # build metadata
 mkdir -p "$A/usr/share/bnasec"
