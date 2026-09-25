@@ -26,7 +26,11 @@ mkdir -p "$TESTS"
 # is room again.
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
   echo "installing qemu for boot tests"
-  pacman -Sy --noconfirm --needed qemu-desktop qemu-img edk2-ovmf > /tmp/qemu-install.log 2>&1 \
+  # prefer pacman-static: the build-phase purge can leave the dynamic pacman's
+  # shared-library closure incomplete
+  PAC=pacman-static
+  command -v pacman-static >/dev/null 2>&1 || PAC=pacman
+  $PAC -Sy --noconfirm --needed qemu-desktop qemu-img edk2-ovmf > /tmp/qemu-install.log 2>&1 \
     || { tail -20 /tmp/qemu-install.log; exit 1; }
 fi
 

@@ -362,17 +362,21 @@ gcc-libs
 EOF
 KEEP="^$(sort -u /tmp/keep-pkgs.txt | grep -v '^$' | paste -sd'|')$"
 echo "keep-closure: $(sort -u /tmp/keep-pkgs.txt | grep -cv '^$') packages"
+# static pacman BEFORE the purge: post-purge pacman operations must not depend on
+# the container's shared-library state (the purge keeps breaking dynamic pacman —
+# libseccomp run 36146550749, libstdc++ run 36149510273 — despite the closure).
+pacman -S --noconfirm --needed pacman-static >> /tmp/purge.log 2>&1 || echo "WARN: pacman-static unavailable, falling back to dynamic pacman"
 PURGE=$(pacman -Qq 2>/dev/null | grep -vxE "$KEEP" || true)
 if [ -n "$PURGE" ]; then
   # shellcheck disable=SC2086
   pacman -Rdd --noconfirm $PURGE > /tmp/purge.log 2>&1 || { echo "purge had failures (tail):"; tail -5 /tmp/purge.log; }
 fi
-# self-verify: pacman alive, and the essential set fully installed (no-ops otherwise)
-if ! command -v pacman >/dev/null 2>&1; then
-  echo "!! pacman vanished in the purge — cannot recover in-place"; exit 1
-fi
-pacman -Sy --noconfirm >/dev/null 2>&1 || true
-pacman -S --noconfirm --needed pacman findutils mtools archiso arch-install-scripts \
+# post-purge package ops go through pacman-static (immune to removed libraries)
+PAC=pacman-static
+command -v pacman-static >/dev/null 2>&1 || { PAC=pacman; command -v pacman >/dev/null 2>&1 || { echo "!! no pacman at all — cannot recover"; exit 1; }; }
+echo "post-purge package manager: $PAC"
+$PAC -Sy --noconfirm >/dev/null 2>&1 || true
+$PAC -S --noconfirm --needed pacman findutils mtools archiso arch-install-scripts \
   squashfs-tools libisoburn e2fsprogs dosfstools libarchive curl gpgme github-cli gcc-libs \
   >> /tmp/purge.log 2>&1 || { echo "essential reinstall failed:"; tail -10 /tmp/purge.log; exit 1; }
 if ! command -v mkarchiso >/dev/null 2>&1 || ! command -v find >/dev/null 2>&1 \
