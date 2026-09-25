@@ -416,6 +416,12 @@ echo "pruned. container: $(pacman -Qq 2>/dev/null | wc -l) packages, free: $(df 
 
 # ------------------------------------------------------------- 6. mkarchiso
 echo "== [6] mkarchiso =="
+# WIPE the container package cache: step [3] downloaded while the disk flirted
+# with full, and ENOSPC delayed-allocation left cache files that pass pacman's
+# initial check but fail pacstrap's ("invalid or corrupted package (PGP
+# signature)" — the runner-side twin of the 1.1.x stick's ext4 error-28 rot).
+# pacstrap reuses this cache via -c, so it must be pristine. Also frees ~2.5GB.
+rm -rf /var/cache/pacman/pkg/*
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(date +%s)}"
 mkarchiso -v -w "$WORK" -o "$OUT" "$PROFILE_DIR" 2>&1 | tail -60
 ISO=$(find "$OUT" -maxdepth 1 -name '*.iso' | head -1)

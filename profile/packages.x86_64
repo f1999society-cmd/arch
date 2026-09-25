@@ -10,7 +10,13 @@ chaotic-mirrorlist
 paru
 base-devel
 linux
-linux-firmware
+# split firmware subsets: the full linux-firmware bundle is ~700MB installed and
+# the runner SSD budget is ~14GB; realtek/atheros/mediatek cover USB-wifi dongles,
+# intel covers laptop wifi
+linux-firmware-realtek
+linux-firmware-atheros
+linux-firmware-mediatek
+linux-firmware-intel
 mkinitcpio
 mkinitcpio-archiso
 # BIOS boot loader (profiledef.sh: bios.syslinux) — mkarchiso validates its presence
