@@ -83,7 +83,6 @@ pkgrel=1
 pkgdesc="bnasec shim: name placeholder, real files from $p-git"
 arch=('any')
 license=('MIT')
-depends=("$p-git")
 package() { :; }
 PKGEOF
     chown -R builduser: "$SD"
