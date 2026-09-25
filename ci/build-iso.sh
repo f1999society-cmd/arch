@@ -351,12 +351,16 @@ done
 for lib in /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /usr/lib/libseccomp.so.2; do
   [ -e "$lib" ] && pacman -Qoq "$lib" >> /tmp/keep-pkgs.txt 2>/dev/null || true
 done
-# static floor: keyrings/mirrors/CAs for the post-purge pacman -S, base metadata
+# static floor: keyrings/mirrors/CAs for the post-purge pacman -S, base metadata.
+# gnupg is NOT an ldd-visible dep (pacman shells out to gpg for signature checks)
+# but without it pacstrap aborts with 'invalid or corrupted package (PGP
+# signature)' — the exact failure that plagued the 1.1.x sticks.
 cat >> /tmp/keep-pkgs.txt <<'EOF'
 pacman-mirrorlist
 archlinux-keyring
 chaotic-keyring
 chaotic-mirrorlist
+gnupg
 ca-certificates
 ca-certificates-utils
 ca-certificates-mozilla
@@ -393,8 +397,13 @@ command -v pacman-static >/dev/null 2>&1 || { PAC=pacman; command -v pacman >/de
 echo "post-purge package manager: $PAC"
 $PAC -Sy --noconfirm >/dev/null 2>&1 || true
 $PAC -S --noconfirm --needed pacman findutils mtools archiso arch-install-scripts \
-  squashfs-tools libisoburn e2fsprogs dosfstools libarchive curl gpgme github-cli gcc-libs \
+  squashfs-tools libisoburn e2fsprogs dosfstools libarchive curl gpgme github-cli gcc-libs gnupg \
   >> /tmp/purge.log 2>&1 || { echo "essential reinstall failed:"; tail -10 /tmp/purge.log; exit 1; }
+# the purge/reinstall window has repeatedly left libstdc++/libseccomp files gone
+# while the DB still claims them installed — force-reextract (-dd, no version
+# check) so the FILES are guaranteed back on disk
+$PAC -S --noconfirm --dd gcc-libs libseccomp >> /tmp/purge.log 2>&1 \
+  || echo "WARN: forced lib reinstall had failures"
 if ! command -v mkarchiso >/dev/null 2>&1 || ! command -v find >/dev/null 2>&1 \
    || ! command -v mmd >/dev/null 2>&1; then
   echo "!! essential tools missing after purge:"; tail -10 /tmp/purge.log; exit 1
@@ -402,6 +411,7 @@ fi
 # diagnostics for the purge side-effects
 ls -l /usr/lib/libstdc++.so.6 >/dev/null 2>&1 && echo "libstdc++ present" || echo "!! libstdc++.so.6 MISSING after purge"
 ls -l /usr/lib/libseccomp.so.2 >/dev/null 2>&1 && echo "libseccomp present" || echo "!! libseccomp.so.2 MISSING after purge"
+command -v gpg >/dev/null 2>&1 && echo "gpg present" || echo "!! gpg MISSING after purge"
 echo "pruned. container: $(pacman -Qq 2>/dev/null | wc -l) packages, free: $(df -h / | awk 'NR==2{print $4}')"
 
 # ------------------------------------------------------------- 6. mkarchiso
