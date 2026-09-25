@@ -327,12 +327,21 @@ echo "collected. home size: $(du -sh "$A/home/bna" | cut -f1)"
 echo "== [5b] pruning build container (free: $(df -h / | awk 'NR==2{print $4}') before) =="
 rm -rf /home/bna /tmp/bnasec-localrepo /tmp/chaotic-bootstrap /tmp/shim-* /tmp/aurbuild-*
 pacman -Sc --noconfirm >/dev/null 2>&1 || true
-KEEP='^(pacman|pacman-mirrorlist|archlinux-keyring|chaotic-keyring|chaotic-mirrorlist|archiso|arch-install-scripts|squashfs-tools|libisoburn|libburn|libisofs|e2fsprogs|dosfstools|bash|glibc|coreutils|filesystem|grep|sed|gawk|tar|gzip|xz|zstd|libarchive|curl|gpgme|libassuan|libgpg-error|npth|libgcrypt|libgpg-error|openssl|ca-certificates|ca-certificates-utils|ca-certificates-mozilla|pcre2|ncurses|readline|iana-etc|licenses|attr|acl|libcap|mpfr|gmp|libffi|expat|gdbm|perl|device-mapper|popt|json-c|lmdb|keyutils|krb5|libnsl|libverto|libssh2|libnghttp2|libpsl|util-linux|util-linux-libs|zlib|bzip2|systemd-libs|github-cli)$'
+KEEP='^(pacman|pacman-mirrorlist|archlinux-keyring|chaotic-keyring|chaotic-mirrorlist|archiso|arch-install-scripts|squashfs-tools|libisoburn|libburn|libisofs|e2fsprogs|dosfstools|findutils|mtools|bash|glibc|coreutils|filesystem|grep|sed|gawk|tar|gzip|xz|zstd|libarchive|curl|gpgme|libassuan|libgpg-error|npth|libgcrypt|libgpg-error|openssl|ca-certificates|ca-certificates-utils|ca-certificates-mozilla|pcre2|ncurses|readline|iana-etc|licenses|attr|acl|libcap|mpfr|gmp|libffi|expat|gdbm|perl|device-mapper|popt|json-c|lmdb|keyutils|krb5|libnsl|libverto|libssh2|libnghttp2|libpsl|util-linux|util-linux-libs|zlib|bzip2|systemd-libs|github-cli)$'
 PURGE=$(pacman -Qq 2>/dev/null | grep -vxE "$KEEP" || true)
 if [ -n "$PURGE" ]; then
   # shellcheck disable=SC2086
   pacman -Rdd --noconfirm $PURGE > /tmp/purge.log 2>&1 || { echo "purge had failures (tail):"; tail -5 /tmp/purge.log; }
 fi
+# self-verify: mkarchiso needs find/mmd/mcopy/pacstrap/xorriso/mksquashfs on the HOST.
+# force-reinstall the whole essential set (no-ops for whatever survived)
+if ! command -v pacman >/dev/null 2>&1; then
+  echo "!! pacman vanished in the purge — cannot recover in-place"; exit 1
+fi
+pacman -Sy --noconfirm >/dev/null 2>&1 || true
+pacman -S --noconfirm --needed pacman findutils mtools archiso arch-install-scripts \
+  squashfs-tools libisoburn e2fsprogs dosfstools libarchive curl gpgme github-cli \
+  >> /tmp/purge.log 2>&1 || { echo "essential reinstall failed:"; tail -10 /tmp/purge.log; exit 1; }
 echo "pruned. container: $(pacman -Qq 2>/dev/null | wc -l) packages, free: $(df -h / | awk 'NR==2{print $4}')"
 
 # ------------------------------------------------------------- 6. mkarchiso
