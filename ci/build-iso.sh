@@ -177,6 +177,9 @@ chmod +x /usr/bin/systemctl
 ls -la /usr/bin/systemctl /usr/bin/systemctl.real
 
 # containers get finicky about ownership (actions mounts, sudo env) — whitelist
+# at the SYSTEM level so both root and bna pass safe.directory checks (per-user
+# config is not enough: the clone/create user and the checking user can differ)
+git config --system --add safe.directory '*' || true
 chown -R bna:bna /home/bna
 sudo -u bna -H git config --global --add safe.directory '*'
 sudo -u bna -H git clone --depth 1 "$HYDE_REPO" /home/bna/HyDE 2>&1 | tail -1
