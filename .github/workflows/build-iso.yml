@@ -143,9 +143,12 @@ jobs:
           \`\`\`
           ISO size: $SIZE. A 4 GB+ stick is enough; the rest becomes persistence.
           EOF
-          gh release delete v1.2.0 --yes --cleanup-tag 2>/dev/null || true
-          gh release create v1.2.0 "$ISO" "$SHAFILE" \
+          gh release delete --repo "$GITHUB_REPOSITORY" v1.2.0 --yes --cleanup-tag 2>/dev/null || true
+          # --repo: gh otherwise shells out to git for repo discovery, and the
+          # workspace bind-mount boundary in the container breaks it
+          # ('fatal: not a git repository ... up to mount point /')
+          gh release create --repo "$GITHUB_REPOSITORY" v1.2.0 "$ISO" "$SHAFILE" \
             --title "bnasec-arch-1.2.0 — HyDE + hardened persistence" \
             --notes-file release-notes.md
           echo "released:"
-          gh release view v1.2.0 --json assets --jq '.assets[].name'
+          gh release view --repo "$GITHUB_REPOSITORY" v1.2.0 --json assets --jq '.assets[].name'
