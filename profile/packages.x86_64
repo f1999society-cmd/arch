@@ -64,6 +64,10 @@ xdg-desktop-portal-hyprland
 xdg-desktop-portal-gtk
 xdg-user-dirs
 xorg-xwayland
+# Hyde extra-dots deps: deez installs these interactively at first run if absent,
+# which cannot work inside the build container (EOF on the pacman prompt) — preinstall
+electron
+swaync
 brightnessctl
 playerctl
 udiskie

@@ -187,8 +187,17 @@ HYDE_HEAD=$(git -C /home/bna/HyDE rev-parse --short HEAD)
 echo "Hyde @ $HYDE_HEAD"
 
 echo "-- running Hyde installer (non-interactive flags; stdin EOF walks prompts to defaults) --"
+# Container has no logind, so /run/user/1000 never exists. Hyde's globalcontrol.sh
+# (sourced by theme.patch.sh, cache.sh, theme.switch.sh) hard-fails without it:
+#   mkdir: cannot create directory '/run/user/1000': Permission denied
+#   -> "Error: unable to source globalcontrol.sh" -> every theme import fails
+#   -> "Wallpaper cache was not generated" + "Theme colour state was not generated"
+#   -> theme_failed=1 -> install.sh exit 1. Pre-create it and pin XDG_RUNTIME_DIR.
+mkdir -p /run/user/1000
+chown bna:bna /run/user/1000
+chmod 700 /run/user/1000
 set +e
-timeout 3600 sudo -u bna -H bash -lc 'cd ~/HyDE/Scripts && ./install.sh -d -r -s -n' < /dev/null > /tmp/hyde-install.log 2>&1
+timeout 3600 sudo -u bna -H env XDG_RUNTIME_DIR=/run/user/1000 bash -lc 'cd ~/HyDE/Scripts && ./install.sh -d -r -s -n' < /dev/null > /tmp/hyde-install.log 2>&1
 HYDE_RC=$?
 set -e
 echo "hyde installer rc=$HYDE_RC"
@@ -206,7 +215,10 @@ mkdir -p "$A/home/bna" "$A/etc/sddm.conf.d" "$A/usr/share/sddm/themes"
 
 # dots: everything in bna's home except the clone + transient venvs/caches
 rm -rf /home/bna/HyDE /home/bna/.local/state/hyde/python_env
+# .cache holds the themepatcher clones (~full theme branches x12) and install logs —
+# tens of MB to GB of dead weight; it is tmpfs-shadowed at runtime anyway (fstab)
 du -sh /home/bna/.cache 2>/dev/null || true
+rm -rf /home/bna/.cache
 cp -a /home/bna/. "$A/home/bna/"
 
 # display manager theme written by install_pst.sh
