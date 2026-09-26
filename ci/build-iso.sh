@@ -404,6 +404,10 @@ echo "collected. home size: $(du -sh "$A/home/bna" | cut -f1)"
 # died at pacstrap with the container still fat (36142103152, 36140211038).
 echo "== [5b] pruning build container (free: $(df -h / | awk 'NR==2{print $4}') before) =="
 rm -rf /home/bna /tmp/bnasec-localrepo /tmp/chaotic-bootstrap /tmp/shim-* /tmp/aurbuild-*
+# the stub repo dir is gone now — drop its pacman.conf section or every later
+# `pacman -Sy` (boot tests' qemu install) dies syncing the dead repo
+sed -i '/^\[bnasec-local\]/,+3d' /etc/pacman.conf
+pacman -Sy --noconfirm >/dev/null 2>&1 || true
 pacman -Sc --noconfirm >/dev/null 2>&1 || true
 
 # Dynamic keep-closure: every binary the post-purge phases need (mkarchiso,
