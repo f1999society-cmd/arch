@@ -135,6 +135,48 @@ EOF
     pacman -Si "$p" >/dev/null 2>&1 || { echo "STILL UNRESOLVED: $p"; exit 1; }
   done
 fi
+
+# (c) deez-required-but-intentionally-omitted stubs: Hyde's deps.toml hard-
+# requires this qt5 set (sddm theme ui/effects, dolphin thumbnails, qt theming),
+# but shipping them blows the ISO past GitHub's 2GiB release-asset cap — sddm,
+# dolphin and kvantum itself are qt6 now. Empty stubs satisfy deez's
+# 'pacman -Q <pkg>' dependency check inside the BUILD CONTAINER ONLY: they are
+# never pacstrapped into the airootfs and this repo is not added to the profile
+# pacman.conf. On the live stick, first-boot deez will offer to install the
+# real packages onto the persistence partition.
+DEEZ_OMIT=(qt5ct kvantum-qt5 qt5-wayland qt5-imageformats qt5-quickcontrols qt5-quickcontrols2 qt5-graphicaleffects)
+LOCALREPO=/tmp/bnasec-localrepo
+mkdir -p "$LOCALREPO"
+STUBBUILT=()
+id builduser >/dev/null 2>&1 || useradd -m builduser
+echo 'builduser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/98-builduser
+chmod 440 /etc/sudoers.d/98-builduser
+for p in "${DEEZ_OMIT[@]}"; do
+  SD="/tmp/shim-$p"; rm -rf "$SD"; mkdir -p "$SD/$p"
+  cat > "$SD/$p/PKGBUILD" <<PKGEOF
+pkgname=$p
+pkgver=1.0
+pkgrel=1
+pkgdesc="bnasec stub: omitted from the ISO for the 2GiB cap (install the real $p on the stick)"
+arch=('any')
+license=('MIT')
+package() { :; }
+PKGEOF
+  chown -R builduser: "$SD"
+  ( cd "$SD/$p" && sudo -u builduser makepkg -f --noconfirm --noprogressbar ) > "/tmp/shim-$p.log" 2>&1 || { echo "stub build failed for $p:"; tail -20 "/tmp/shim-$p.log"; exit 1; }
+  mv "$SD/$p/$p-1.0-1-any.pkg.tar.zst" "$LOCALREPO/"
+  STUBBUILT+=("$LOCALREPO/$p-1.0-1-any.pkg.tar.zst")
+done
+repo-add "$LOCALREPO/bnasec-local.db.tar.gz" "${STUBBUILT[@]}" >> /tmp/repo-add.log 2>&1 || { cat /tmp/repo-add.log; exit 1; }
+grep -q '^\[bnasec-local\]' /etc/pacman.conf || cat >> /etc/pacman.conf <<EOF
+
+[bnasec-local]
+Server = file://${LOCALREPO}
+SigLevel = Never
+EOF
+pacman -Sy --noconfirm >/dev/null
+pacman -S --noconfirm --needed "${DEEZ_OMIT[@]}" >> /tmp/pkg-install.log 2>&1 || { tail -8 /tmp/pkg-install.log; echo "!! stub install failed"; exit 1; }
+echo "deez-omitted stubs installed into container (not the ISO): ${DEEZ_OMIT[*]}"
 echo "all $(echo "$PKGS" | wc -w) packages resolve in repos"
 
 # ------------------------------------------------------------- 3. install full list
