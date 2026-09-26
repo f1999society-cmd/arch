@@ -281,6 +281,10 @@ if [ -d /home/bna/.config/hyde/themes ]; then
   done
 fi
 cp -a /home/bna/. "$A/home/bna/"
+# animated-wallpaper videos are the heaviest theme assets and only matter for
+# one cosmetic mode — static wallpapers stay; ISO must fit GitHub's 2GiB
+# release-asset cap (we were 10MiB over, run 41a7949 series)
+find "$A/home/bna/.config/hyde/themes" -type f \( -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' \) -print -delete 2>/dev/null | head -10
 
 # display manager theme written by install_pst.sh + Hyde theme archives.
 # copy_unowned: copy SRC under DST but SKIP any path owned by the named packages —
