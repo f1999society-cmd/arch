@@ -80,15 +80,16 @@ fi
 # ---- acceleration
 if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL="kvm"; else ACCEL="tcg"; fi
 echo "accel: $ACCEL"
-if [ "$ACCEL" = "kvm" ]; then BOOT_WAIT=180; CMD_WAIT=25; HARD_WAIT=360; AUTOWAIT=60; else BOOT_WAIT=540; CMD_WAIT=45; HARD_WAIT=780; AUTOWAIT=90; fi
+if [ "$ACCEL" = "kvm" ]; then BOOT_WAIT=180; CMD_WAIT=25; HARD_WAIT=380; AUTOWAIT=60; else BOOT_WAIT=540; CMD_WAIT=45; HARD_WAIT=800; AUTOWAIT=90; fi
 
 # ---- can this qemu do virgl GL? without it the greeter/HyDE can't paint
-# (run 36217224195: virtio-gpu-pci -> sddm active but 12 identical black
-# frames). Probe with a 4s throwaway VM: rc 124 = qemu RAN (device ok);
-# any other rc = instant death (device/gl unsupported) -> fallback.
+# (run 36217224195: sddm active but black frames; 36219109620: '-display
+# none,gl=on' rejected — "OpenGL is not supported by display backend 'none'").
+# egl-headless is the supported headless-GL display. Probe with a 4s
+# throwaway VM: rc 124 = qemu RAN (device ok); anything else = fallback.
 GPU_DEVICE=virtio-gpu-pci
 timeout 4 qemu-system-x86_64 -machine q35 -m 128 -accel "$ACCEL" \
-    -display none,gl=on -device virtio-vga-gl -monitor none > /tmp/gpu-probe.log 2>&1
+    -display egl-headless,gl=on -device virtio-vga-gl -monitor none > /tmp/gpu-probe.log 2>&1
 if [ $? -eq 124 ]; then
     GPU_DEVICE=virtio-vga-gl
 else
@@ -106,7 +107,7 @@ Q() {  # base qemu invocation (arg1: hard timeout seconds, rest: extra args)
     # '-monitor <path>' died with "not a valid char driver" on every test)
     local mon="none" disp="-display none"
     [ -n "${MON_SOCK:-}" ] && mon="unix:$MON_SOCK,server,nowait"
-    [ "$GPU_DEVICE" = virtio-vga-gl ] && disp="-display none,gl=on"
+    [ "$GPU_DEVICE" = virtio-vga-gl ] && disp="-display egl-headless,gl=on"
     timeout "$tmo" qemu-system-x86_64 -machine q35 -m 3072 -smp 2 \
         -accel "$ACCEL" $disp \
         -device "$GPU_DEVICE" \
@@ -147,16 +148,21 @@ sched_shots 4:t1-01-menu 9:t1-02-menu 25:t1-03-early $((BOOT_WAIT/2)):t1-04-mid 
   $((BOOT_WAIT+CMD_WAIT+34)):t1-09-greeter \
   $((BOOT_WAIT+CMD_WAIT+16+AUTOWAIT+15)):t1-10-hyde \
   $((BOOT_WAIT+CMD_WAIT+16+AUTOWAIT+23)):t1-11-hyde2 \
-  $((BOOT_WAIT+CMD_WAIT+16+AUTOWAIT+34)):t1-12-hyde3
+  $((BOOT_WAIT+CMD_WAIT+16+AUTOWAIT+34)):t1-12-hyde3 \
+  $((BOOT_WAIT+CMD_WAIT+16+AUTOWAIT+45)):t1-13-final
 { sleep "$BOOT_WAIT"; \
   echo "printf 'BNA_SHELL_READY_%s\\n' T1"; sleep "$CMD_WAIT"; \
   echo "findmnt -n -o FSTYPE /"; sleep 8; \
   echo "printf 'BNA_SDDM_%s\\n' \"\$(systemctl is-active sddm 2>&1)\""; sleep 6; \
   echo "printf 'BNA_HYP_%s\\n' \"\$(pgrep -c Hyprland 2>/dev/null)\""; sleep 6; \
-  echo "pgrep -a sddm-greeter | head -1; ls -la /dev/dri/ 2>/dev/null | head -4; ls /usr/share/wayland-sessions/ 2>/dev/null"; sleep 6; \
+  echo "ls -l /dev/dri/"; sleep 3; \
+  echo "pacman -Qq | grep -E '^(mesa|vulkan-|qt6-)' | head -8"; sleep 4; \
+  echo "journalctl -b --no-pager -u sddm | tail -8"; sleep 5; \
   echo "echo bnasec | sudo -S sh -c 'mkdir -p /etc/sddm.conf.d; printf \"[Autologin]\\nUser=bna\\nSession=hyprland.desktop\\n\" > /etc/sddm.conf.d/zz-ci-autologin.conf; cat /etc/sddm.conf.d/zz-ci-autologin.conf'"; sleep 6; \
   echo "echo bnasec | sudo -S systemctl restart sddm"; sleep "$AUTOWAIT"; \
   echo "printf 'BNA_HYP2_%s\\n' \"\$(pgrep -c Hyprland 2>/dev/null)\""; sleep 8; \
+  echo "pgrep -a Hyprland | head -2"; sleep 3; \
+  echo "tail -40 /tmp/hypr/*/hyprland.log 2>/dev/null | grep -iE 'backend|egl|output|gpu|drm|swrast' | head -12"; sleep 4; \
   echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
     -serial stdio > "$TESTS/t1-serial.log" 2>&1
 end_shots
@@ -183,7 +189,8 @@ echo "T1 graphical probe: $(grep -ao 'BNA_SDDM_[a-z]*' "$TESTS/t1-serial.log" | 
 echo "== T2: persistence proof =="
 MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
 sched_shots 25:t2b1-01-early $((BOOT_WAIT/2)):t2b1-02-mid \
-  $((BOOT_WAIT+CMD_WAIT+5)):t2b1-03-session $((BOOT_WAIT+CMD_WAIT+13)):t2b1-04-proof
+  $((BOOT_WAIT+CMD_WAIT+5)):t2b1-03-session $((BOOT_WAIT+CMD_WAIT+13)):t2b1-04-proof \
+  $((BOOT_WAIT+CMD_WAIT+40)):t2b1-05-hyde
 PERSIST_APPEND="archisobasedir=arch archisolabel=BNASEC_120 cow_label=persistence cow_directory=persist console=ttyS0,115200n8 quiet loglevel=3"
 { sleep "$BOOT_WAIT"; \
   echo "echo bnasec | sudo -S sh -c \"printf 'BNA_PERSIST_PROOF_%s\\n' 120 > /var/lib/persist-proof\""; sleep "$CMD_WAIT"; \
