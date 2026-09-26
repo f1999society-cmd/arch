@@ -85,10 +85,14 @@ bad() { echo "FAIL  $1"; FAILN=$((FAILN+1)); echo "----- last 40 serial lines of
 
 Q() {  # base qemu invocation (arg1: hard timeout seconds, rest: extra args)
     local tmo="$1"; shift
+    # -monitor takes a chardev spec, NOT a bare path (run 36215135468:
+    # '-monitor <path>' died with "not a valid char driver" on every test)
+    local mon="none"
+    [ -n "${MON_SOCK:-}" ] && mon="unix:$MON_SOCK,server,nowait"
     timeout "$tmo" qemu-system-x86_64 -machine q35 -m 3072 -smp 2 \
         -accel "$ACCEL" -display none \
         -device virtio-gpu-pci \
-        -monitor "${MON_SOCK:-none}" \
+        -monitor "$mon" \
         -no-reboot "$@"
 }
 
