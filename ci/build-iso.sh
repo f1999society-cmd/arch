@@ -545,6 +545,10 @@ tail -60 /tmp/mkarchiso.log
 ISO=$(find "$ISO_TMP" -maxdepth 1 -name '*.iso' | head -1)
 [ -n "$ISO" ] || { echo "no ISO produced"; exit 1; }
 echo "ISO: $ISO ($(du -h "$ISO" | cut -f1))"
+# fail FAST on GitHub's hard release-asset cap instead of burning 25 minutes of
+# boot tests before the 422 (run 36197875432)
+[ "$(stat -c%s "$ISO")" -lt 2147483648 ] \
+  || { echo "!! ISO exceeds GitHub's 2GiB release-asset cap — trim packages.x86_64"; exit 1; }
 # ------------------------------------------------------------- 7. assertions
 echo "== [7] post-build assertions =="
 SFS=$(find "$WORK" -name 'airootfs.sfs' | head -1)

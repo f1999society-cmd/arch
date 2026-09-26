@@ -107,7 +107,9 @@ fzf
 btop
 cava
 wf-recorder
-code
+# 'code' (VS Code, 823MiB installed + electron42 332MiB) removed: GitHub release
+# assets are capped at 2GiB and the ISO must stay under it. Reinstallable on the
+# stick anytime: sudo pacman -S code
 spotify-launcher
 
 # --------------------------------------------------- shell (HyDE: zsh + starship)
