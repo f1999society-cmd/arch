@@ -120,9 +120,12 @@ sync
 # ================= T1: BIOS boot from dd'd USB image, default persistent entry =================
 echo "== T1: BIOS boot, default persistent entry =="
 MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
-# menu shot at 4s+9s (syslinux TIMEOUT is 5s), session shots land after the
-# serial shell answers and after the sddm/Hyprland probes
-sched_shots 4:t1-01-menu 9:t1-02-menu 25:t1-03-early 240:t1-04-mid 520:t1-05-late 555:t1-06-session 597:t1-07-probes
+# shot offsets are computed from BOOT_WAIT/CMD_WAIT so they land on the same
+# events under kvm (180s boots) and tcg (540s boots); shots after qemu exits
+# are silent no-ops, so a couple of speculative late shots are free
+sched_shots 4:t1-01-menu 9:t1-02-menu 25:t1-03-early $((BOOT_WAIT/2)):t1-04-mid \
+  $((BOOT_WAIT-30)):t1-05-late $((BOOT_WAIT+5)):t1-06-ready \
+  $((BOOT_WAIT+CMD_WAIT+10)):t1-07-probes $((BOOT_WAIT+CMD_WAIT+16)):t1-08-desktop
 { sleep "$BOOT_WAIT"; \
   echo "printf 'BNA_SHELL_READY_%s\\n' T1"; sleep "$CMD_WAIT"; \
   echo "findmnt -n -o FSTYPE /"; sleep 8; \
@@ -153,7 +156,8 @@ echo "T1 graphical probe: $(grep -ao 'BNA_SDDM_[a-z]*' "$TESTS/t1-serial.log" | 
 # ================= T2: persistence proof across two boots =================
 echo "== T2: persistence proof =="
 MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
-sched_shots 25:t2b1-01-early 240:t2b1-02-mid 570:t2b1-03-session 610:t2b1-04-proof
+sched_shots 25:t2b1-01-early $((BOOT_WAIT/2)):t2b1-02-mid \
+  $((BOOT_WAIT+CMD_WAIT+5)):t2b1-03-session $((BOOT_WAIT+CMD_WAIT+13)):t2b1-04-proof
 PERSIST_APPEND="archisobasedir=arch archisolabel=BNASEC_120 cow_label=persistence cow_directory=persist console=ttyS0,115200n8 quiet loglevel=3"
 { sleep "$BOOT_WAIT"; \
   echo "echo bnasec | sudo -S sh -c \"printf 'BNA_PERSIST_PROOF_%s\\n' 120 > /var/lib/persist-proof\""; sleep "$CMD_WAIT"; \
@@ -166,7 +170,8 @@ end_shots
 grep -aq "BNA_T2_WROTE_ok" "$TESTS/t2-boot1.log" \
   && ok "T2a marker written inside live session" || bad "T2a write" "$TESTS/t2-boot1.log"
 
-sched_shots 25:t2b2-01-early 240:t2b2-02-mid 555:t2b2-03-proof-read 585:t2b2-04-late
+sched_shots 25:t2b2-01-early $((BOOT_WAIT/2)):t2b2-02-mid \
+  $((BOOT_WAIT+12)):t2b2-03-proof-read $((BOOT_WAIT+CMD_WAIT+2)):t2b2-04-late
 { sleep "$BOOT_WAIT"; \
   echo "cat /var/lib/persist-proof"; sleep 8; \
   echo "echo BNA_T2_READ"; sleep "$CMD_WAIT"; \
@@ -179,7 +184,7 @@ grep -aq "BNA_PERSIST_PROOF_120" "$TESTS/t2-boot2.log" \
 
 # ================= T3: RAM-only volatile session =================
 echo "== T3: RAM-only session =="
-sched_shots 25:t3-01-early 240:t3-02-mid 560:t3-03-session
+sched_shots 25:t3-01-early $((BOOT_WAIT/2)):t3-02-mid $((BOOT_WAIT+10)):t3-03-session
 { sleep "$BOOT_WAIT"; echo "printf 'BNA_T3_VOLATILE_%s\\n' ok"; sleep "$CMD_WAIT"; } | \
   Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" \
     -append "archisobasedir=arch archisolabel=BNASEC_120 console=ttyS0,115200n8 quiet loglevel=3" \
@@ -197,7 +202,7 @@ if [ -z "$OVMF_CODE" ]; then OVMF_CODE=$(find /usr/share/ovmf /usr/share/edk2* -
 if [ -n "$OVMF_CODE" ]; then
   OVMF_VARS_SRC=$(find /usr/share/edk2 /usr/share/ovmf -name 'OVMF_VARS.4m.fd' -o -name 'OVMF_VARS.fd' 2>/dev/null | head -1)
   cp -f "$OVMF_VARS_SRC" "$TESTS/ovmf-vars.fd"
-  sched_shots 15:t4-01-ovmf 60:t4-02-menu 300:t4-03-mid 565:t4-04-session
+  sched_shots 15:t4-01-ovmf 60:t4-02-menu $((BOOT_WAIT/2)):t4-03-mid $((BOOT_WAIT+15)):t4-04-session
   { sleep "$BOOT_WAIT"; echo "printf 'BNA_T4_UEFI_READY_%s\\n' ok"; sleep "$CMD_WAIT"; \
     echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
       -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
