@@ -265,6 +265,36 @@ pacman -S --noconfirm --needed bibata-cursor-theme grimblast-git >> /tmp/pkg-ins
 run_as_bna bash -c 'mkdir -p ~/.cache/ml4w/hyprland-dotfiles && printf "%s" "$HOME/.config/ml4w/wallpapers/default.jpg" > ~/.cache/ml4w/hyprland-dotfiles/current_wallpaper'
 run_as_bna xdg-user-dirs-update || true
 
+# v2.0.1 follow-ups baked for the next rebuild (v2.0.0 sticks can get all of
+# this live via fix/bnasec-repair.sh):
+#  (a) oh-my-zsh + the custom plugins 20-customization enables, INTO
+#      ~/.config so they ride the persistence partition (00-init points ZSH
+#      at ~/.oh-my-zsh which we never shipped -> 'no such file' on every shell)
+run_as_bna git clone -q --depth=1 https://github.com/ohmyzsh/ohmyzsh.git /home/bna/.config/ohmyzsh
+for p in zsh-users/zsh-autosuggestions zsh-users/zsh-syntax-highlighting zdharma-continuum/fast-syntax-highlighting; do
+  run_as_bna git clone -q --depth=1 "https://github.com/$p.git" "/home/bna/.config/ohmyzsh/custom/plugins/${p##*/}" \
+    || echo "WARN: plugin ${p##*/} clone failed (non-fatal)"
+done
+#  (b) zshrc fragment: point $ZSH at the baked clone (loads after 00-init,
+#      before 20-customization sources it)
+cat > /home/bna/.config/zshrc/10-bnasec-ohmy.zsh <<'EOF'
+# bnasec: oh-my-zsh lives inside the persistence partition (~/.config)
+[ -f "$HOME/.config/ohmyzsh/oh-my-zsh.sh" ] && export ZSH="$HOME/.config/ohmyzsh"
+EOF
+#  (c) zshrc fragment: graceful degradation when volatile packages are absent
+cat > /home/bna/.config/zshrc/99-bnasec.zsh <<'EOF'
+# bnasec: keep `ls` working even if eza went away with the volatile root
+if ! command -v eza >/dev/null 2>&1; then
+    unalias ls ll lt 2>/dev/null
+    alias ls='ls --color=auto' ll='ls -alh' lt='ls -a'
+fi
+EOF
+#  (d) override copy of 20-customization with the fzf line guarded
+mkdir -p /home/bna/.config/zshrc/custom
+sed 's|^source <(fzf --zsh)|command -v fzf >/dev/null 2>\&1 \&\& source <(fzf --zsh)|' \
+  /home/bna/.config/zshrc/20-customization > /home/bna/.config/zshrc/custom/20-customization
+chown -R bna:bna /home/bna/.config/ohmyzsh /home/bna/.config/zshrc
+
 # clone dirs and caches never enter the ISO
 rm -rf /home/bna/.ml4w-src /home/bna/.cache /tmp/ml4w-settings /tmp/ml4w-overview /tmp/ml4w-dock
 chown -R bna:bna /home/bna
