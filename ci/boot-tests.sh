@@ -192,6 +192,12 @@ grep -aq "BNA_PERSIST_SVC_active" "$TESTS/t1-serial.log" \
 grep -aq "\[/home/bna/.config\]" "$TESTS/t1-serial.log" \
   && ok "T1g .config bound from stick" || bad "T1g bind .config" "$TESTS/t1-serial.log"
 grep -aq "BNA_QS_" "$TESTS/t1-serial.log" && ok "T1h quickshell probe answered" || ok "T1h quickshell probe inconclusive"
+# v2.0.1 regression guard: mkarchiso strips exec bits from EVERY baked file
+# (cp -af --no-preserve=mode). If ml4w-autostart stays 644 the whole desktop
+# autostart chain dies with 'Permission denied' -> user sees only a cursor.
+# bnasec-fixmodes.service (After=bnasec-persist) self-verifies on boot.
+grep -aq "bnasec-fixmodes: PASS" "$TESTS/t1-serial.log" \
+  && ok "T1i autostart exec bits restored (bar/wallpaper chain live)" || bad "T1i fixmodes" "$TESTS/t1-serial.log"
 # report-only: does the graphical stack actually come up inside the guest?
 echo "T1 graphical probe: $(grep -ao 'BNA_HYP_[0-9]*' "$TESTS/t1-serial.log" | tail -1) quickshell: $(grep -ao 'BNA_QS_[0-9]*' "$TESTS/t1-serial.log" | tail -1) persist: $(grep -ao 'BNA_PERSIST_SVC_[a-z]*' "$TESTS/t1-serial.log" | tail -1)"
 

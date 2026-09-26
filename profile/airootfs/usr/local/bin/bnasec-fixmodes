@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# bnasec fixmodes — restore the exec bits mkarchiso strips from the profile.
+#
+# WHY THIS EXISTS: mkarchiso copies the custom airootfs with
+# 'cp -af --no-preserve=ownership,mode' — every baked file lands as 644 and
+# the official fix (file_permissions in profiledef.sh) only covers EXACT
+# paths. The ML4W dotfiles ship ~90 runtime scripts that Hyprland execs
+# directly (ml4w-autostart, listeners.sh, gtk.sh, launch.sh, ...). Stripped
+# to 644, every single autostart item dies with "Permission denied" and the
+# user gets a bare black desktop with just a cursor. Package-owned binaries
+# (qs, awww-daemon, swaync, hypridle, kitty) are unaffected — so the
+# compositor comes up fine and hides the damage.
+#
+# Runs AFTER bnasec-persist so the chmod lands on the FINAL view of the
+# dirs: on later boots that is the stick's persisted copy, so the fix is
+# written through the bind and survives forever.
+set -uo pipefail
+
+LOG_TAG="bnasec-fixmodes"
+FIXED=0
+
+fix() {
+    local t="$1"
+    [ -e "$t" ] || return 0
+    chmod a+x "$t" 2>/dev/null && FIXED=$((FIXED + 1)) || true
+    if [ -d "$t" ]; then
+        local n
+        n=$(find "$t" -type f -exec chmod a+x {} + 2>/dev/null; find "$t" -type f | wc -l)
+        FIXED=$((FIXED + n))
+    fi
+}
+
+# ML4W autostart chain (autostart.lua execs these directly)
+fix /home/bna/.config/hypr/scripts
+fix /home/bna/.config/hypr/ml4w-autostart.sh
+fix /home/bna/.config/ml4w/scripts
+fix /home/bna/.config/ml4w/bin
+fix /home/bna/.config/ml4w/listeners
+fix /home/bna/.config/ml4w/listeners.sh
+fix /home/bna/.config/waybar/launch.sh
+fix /home/bna/.config/matugen/post-hook-scripts
+
+# companion quickshell app runtime files (dock/settings/overview launchers)
+fix /home/bna/.local/bin
+fix /home/bna/.local/share
+
+# self-verify on the two files the whole desktop depends on
+if [ -x /home/bna/.config/ml4w/scripts/ml4w-autostart ] \
+   && [ -x /home/bna/.config/ml4w/listeners.sh ]; then
+    echo "$LOG_TAG: PASS ml4w-autostart + listeners.sh executable ($FIXED paths fixed)"
+else
+    echo "$LOG_TAG: FAIL autostart scripts still not executable — desktop bar will be missing"
+fi
+exit 0

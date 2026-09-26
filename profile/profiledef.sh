@@ -8,7 +8,7 @@ iso_name="bnasec-arch"
 iso_label="BNASEC200"
 iso_publisher="bnasec <https://github.com/f1999society-cmd/arch>"
 iso_application="bnasec Arch Live — Hyprland + ML4W / selective persistence"
-iso_version="2.0.0"
+iso_version="2.0.1"
 install_dir="arch"
 buildmodes=('iso')
 bootmodes=('bios.syslinux'
@@ -26,6 +26,7 @@ file_permissions=(
   # silently DROPS sudoers.d files that are not 0440; the toolbox/hook need 755.
   ["/usr/local/bin/bnasec-toolbox"]="0:0:755"
   ["/usr/local/bin/bnasec-persist-bind"]="0:0:755"
+  ["/usr/local/bin/bnasec-fixmodes"]="0:0:755"
   ["/usr/local/bin/bnasec"]="0:0:755"
   ["/usr/lib/initcpio/hooks/archiso_bnasec"]="0:0:755"
   ["/usr/lib/initcpio/install/archiso_bnasec"]="0:0:644"

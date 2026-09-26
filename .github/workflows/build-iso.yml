@@ -16,7 +16,7 @@ on:
         required: false
         default: ""
       publish:
-        description: "publish release v2.0.0 when tests pass (set false for test/screenshot reruns)"
+        description: "publish release v2.0.1 when tests pass (set false for test/screenshot reruns)"
         required: false
         default: "true"
 
@@ -102,7 +102,7 @@ jobs:
           path: ${{ env.OUT_DIR }}/*.iso
           retention-days: 3
 
-      - name: publish release v2.0.0
+      - name: publish release v2.0.1
         if: ${{ success() && github.event.inputs.skip_tests != 'true' && inputs.publish != 'false' }}
         run: |
           ISO=$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' | head -1)
@@ -111,46 +111,48 @@ jobs:
           SHA=$(awk '{print $1}' "$SHAFILE")
           SIZE=$(du -h "$ISO" | cut -f1)
           cat > release-notes.md <<EOF
-          # bnasec-arch 2.0.0 — rebuilt from scratch: Arch + Hyprland + ML4W
+          # bnasec-arch 2.0.1 — ML4W desktop: autostart exec-bit fix
 
-          Complete rebuild on user request: v1.2.x's HyDE desktop replaced by the
-          [ML4W dotfiles 2.16](https://github.com/mylinuxforwork/dotfiles) — the
-          Quickshell status bar, dock, settings app and wallpaper switcher look.
-          ISO trimmed to ~1.6GB (was 2GB).
+          Hotfix on top of 2.0.0: on real hardware the desktop came up as a bare
+          black screen with only a cursor — no bar, no dock, no wallpaper.
 
-          ## What changed in 2.0.0
-          - **ML4W desktop baked in**: Quickshell status bar (top), dock (bottom), ML4W Settings app, Quickshell Overview, Welcome app, matugen theming, awww wallpapers — all preinstalled; first boot lands on the finished desktop with the default wallpaper pre-applied
-          - **No display manager at all**: getty autologins as `bna` on tty1 and .zprofile starts Hyprland via uwsm — the entire X11-greeter black-screen bug class from 1.2.0/1.2.1 is structurally gone
-          - **Selective persistence (the big one)**: the root filesystem is now ALWAYS volatile — packages reset to ISO state every boot, so package rot like the 1.1.x stick is physically impossible. What persists is exactly: `~/.mozilla` (Firefox profiles/storage), `~/.config` (ML4W/Hyprland settings + wallpaper state), `~/.local/share` (app data), `~/Documents`, `~/Downloads`, `~/Pictures` — bind-mounted from the stick's ext4 `persistence` partition (auto-created on first boot, fsck'd every boot, no root reserve)
-          - **RAM-only menu entry** (`bnasec_nopersist`) never touches the stick
-          - **AMD GPU firmware** (linux-firmware-amdgpu) + all wifi firmware kept
+          ## Root cause
+          mkarchiso bakes every profile file with mode 644 ('cp -af
+          --no-preserve=mode'). The ML4W dotfiles ship ~90 runtime scripts that
+          Hyprland execs DIRECTLY (ml4w-autostart, listeners.sh, gtk.sh,
+          waybar launch.sh, ...). Stripped to 644, every autostart item died
+          with 'Permission denied' — the compositor itself (a package binary)
+          still ran, hiding the damage. 2.0.0 only restored 3 exact paths via
+          profiledef file_permissions; enumerating 91 paths that way is not
+          maintainable.
 
-          ## Apps shipped
-          firefox, kitty, thunar, rofi, wlogout, swaync, fastfetch, btop, loupe, grimblast (screenshots), cliphist, network/bluetooth applets, pipewire audio, zsh + ohmyposh, quickshell + matugen + awww (ML4W engine)
+          ## The fix
+          - new bnasec-fixmodes.service (runs every boot, After=bnasec-persist):
+            restores +x on the whole ML4W script tree and companion launchers,
+            self-verifies (PASS line on console), and because it runs after the
+            persist bind, the fix is written through to the stick — one boot of
+            2.0.1 permanently repairs a stick first seeded by 2.0.0
+          - new CI test T1i fails the build if the autostart chain is not
+            executable in a real guest boot (regression guard)
 
-          ## Verified in CI (QEMU)
-          - BIOS boot from dd'd USB image: data partition auto-created, volatile overlay root, .config bound from stick, Hyprland session answering
-          - Selective persistence proof: markers in `~/.config` AND `~/Documents` read back after a full reboot
-          - RAM-only session boots volatile, stick untouched
-          - UEFI boot verified via OVMF
-
-          ## Login
-          - Autologins into Hyprland as `bna` on boot; password `bnasec` (sudo: same)
+          Everything else is identical to 2.0.0: same package set, same size
+          class (~1.7GB), same selective persistence (Firefox, config, app
+          data, Documents/Downloads/Pictures), same boot menu.
 
           ## Flash
           ```bash
-          sha256sum bnasec-arch-2.0.0-x86_64.iso
+          sha256sum bnasec-arch-2.0.1-x86_64.iso
           # expected: $SHA
-          sudo dd if=bnasec-arch-2.0.0-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+          sudo dd if=bnasec-arch-2.0.1-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
           ```
           ISO size: $SIZE. A 4 GB+ stick is enough; the rest becomes your data partition.
           EOF
-          gh release delete --repo "$GITHUB_REPOSITORY" v2.0.0 --yes --cleanup-tag 2>/dev/null || true
+          gh release delete --repo "$GITHUB_REPOSITORY" v2.0.1 --yes --cleanup-tag 2>/dev/null || true
           # --repo: gh otherwise shells out to git for repo discovery, and the
           # workspace bind-mount boundary in the container breaks it
           # ('fatal: not a git repository ... up to mount point /')
-          gh release create --repo "$GITHUB_REPOSITORY" v2.0.0 "$ISO" "$SHAFILE" \
-            --title "bnasec-arch-2.0.0 — ML4W desktop + selective persistence" \
+          gh release create --repo "$GITHUB_REPOSITORY" v2.0.1 "$ISO" "$SHAFILE" \
+            --title "bnasec-arch-2.0.1 — cursor-only desktop fix (exec bits)" \
             --notes-file release-notes.md
           echo "released:"
-          gh release view --repo "$GITHUB_REPOSITORY" v2.0.0 --json assets --jq '.assets[].name'
+          gh release view --repo "$GITHUB_REPOSITORY" v2.0.1 --json assets --jq '.assets[].name'

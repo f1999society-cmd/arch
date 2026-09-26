@@ -1,0 +1,18 @@
+[Unit]
+Description=bnasec — restore exec bits mkarchiso strips from baked user scripts
+Documentation=man:chmod(1)
+# MUST run after bnasec-persist: the chmod has to land on the final view of
+# ~/.config/.local — on later boots that is the stick copy through the bind,
+# so the fix is written through and persists.
+After=bnasec-persist.service
+ConditionPathExists=/home/bna/.config/ml4w/scripts
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/bnasec-fixmodes
+StandardOutput=journal+console
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

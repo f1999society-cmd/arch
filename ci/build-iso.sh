@@ -317,11 +317,16 @@ chmod 755 "$A/usr/local/bin/bnasec-toolbox"
 [ -x "$A/usr/local/bin/bnasec-persist-bind" ] \
   || { echo "!! bnasec-persist-bind missing from profile:"; ls -la "$A/usr/local/bin/" 2>&1; exit 1; }
 chmod 755 "$A/usr/local/bin/bnasec-persist-bind"
+[ -f "$A/usr/local/bin/bnasec-fixmodes" ] \
+  || { echo "!! bnasec-fixmodes missing from profile:"; ls -la "$A/usr/local/bin/" 2>&1; exit 1; }
+chmod 755 "$A/usr/local/bin/bnasec-fixmodes"
+[ -e "$A/etc/systemd/system/multi-user.target.wants/bnasec-fixmodes.service" ] \
+  || { echo "!! bnasec-fixmodes.service not enabled in profile:"; ls -la "$A/etc/systemd/system/multi-user.target.wants/" 2>&1; exit 1; }
 [ -e "$A/etc/systemd/system/multi-user.target.wants/bnasec-persist.service" ] \
   || { echo "!! bnasec-persist.service not enabled in profile:"; ls -la "$A/etc/systemd/system/multi-user.target.wants/" 2>&1; exit 1; }
 echo "toolbox staged: $(du -h "$A/usr/local/bin/bnasec-toolbox" | cut -f1) sha12=$(sha256sum "$A/usr/local/bin/bnasec-toolbox" | cut -c1-12)"
 cat > "$A/usr/share/bnasec/BUILD-INFO" <<EOF
-iso: bnasec-arch-2.0.0
+iso: bnasec-arch-2.0.1
 built: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 ml4w-commit: $ML4W_HEAD
 ml4w-repo: $ML4W_REPO
@@ -551,9 +556,11 @@ unsquashfs -f -d "$CHECK" "$SFS" \
   'home/bna/.config/hypr' 'home/bna/.config/quickshell' 'home/bna/.zprofile' \
   'home/bna/.local/share/ml4w-dotfiles-settings' 'home/bna/.local/share/ml4w-dock' \
   'home/bna/.local/share/quickshell-overview' \
-  'usr/local/bin/bnasec-toolbox' 'usr/local/bin/bnasec-persist-bind' \
+  'usr/local/bin/bnasec-toolbox' 'usr/local/bin/bnasec-persist-bind' 'usr/local/bin/bnasec-fixmodes' \
   'etc/systemd/system/bnasec-persist.service' \
+  'etc/systemd/system/bnasec-fixmodes.service' \
   'etc/systemd/system/multi-user.target.wants/bnasec-persist.service' \
+  'etc/systemd/system/multi-user.target.wants/bnasec-fixmodes.service' \
   'etc/pacman.conf' \
   'usr/lib/initcpio/hooks/archiso_bnasec' 'usr/bin/sudo' 'usr/bin/su' \
   'usr/bin/mount' 'usr/bin/passwd' 'usr/share/bnasec' \
@@ -566,7 +573,14 @@ FAIL=0
 [ -d "$CHECK/home/bna/.local/share/ml4w-dock" ] && echo "PASS ML4W dock baked" || { echo "FAIL ml4w-dock missing"; FAIL=1; }
 [ -d "$CHECK/home/bna/.local/share/quickshell-overview" ] && echo "PASS quickshell overview baked" || { echo "FAIL quickshell-overview missing"; FAIL=1; }
 [ -x "$CHECK/usr/local/bin/bnasec-persist-bind" ] && echo "PASS persist-bind script baked" || { echo "FAIL bnasec-persist-bind missing/not-exec — context:"; ls -la "$CHECK/usr/local/bin/" 2>&1; unsquashfs -ll "$SFS" 2>/dev/null | grep -E 'usr/local/bin' | head; FAIL=1; }
+[ -x "$CHECK/usr/local/bin/bnasec-fixmodes" ] && echo "PASS fixmodes script baked (v2.0.1 exec-bit restore)" || { echo "FAIL bnasec-fixmodes missing/not-exec"; FAIL=1; }
+# NOTE: ML4W scripts are EXPECTED to be 644 inside the SFS — mkarchiso strips
+# modes for everything not listed in profiledef file_permissions (91 script
+# paths, not enumerable sanely). bnasec-fixmodes.service restores them at
+# every boot AFTER bnasec-persist, and ci/boot-tests.sh T1i proves the PASS
+# line from a real guest boot. Do NOT assert +x on home scripts here.
 [ -f "$CHECK/etc/systemd/system/bnasec-persist.service" ] && [ -L "$CHECK/etc/systemd/system/multi-user.target.wants/bnasec-persist.service" ] && echo "PASS persist service enabled" || { echo "FAIL bnasec-persist.service not enabled"; FAIL=1; }
+[ -f "$CHECK/etc/systemd/system/bnasec-fixmodes.service" ] && [ -L "$CHECK/etc/systemd/system/multi-user.target.wants/bnasec-fixmodes.service" ] && echo "PASS fixmodes service enabled" || { echo "FAIL bnasec-fixmodes.service not enabled"; FAIL=1; }
 [ -x "$CHECK/usr/local/bin/bnasec-toolbox" ] && echo "PASS toolbox baked" || { echo "FAIL toolbox missing/not-exec — context:"; ls -la "$CHECK/usr/local/bin/" 2>&1; cat "$CHECK/usr/share/bnasec/BUILD-INFO" 2>&1; unsquashfs -ll "$SFS" 2>/dev/null | grep -E 'usr/local|BUILD-INFO' | head -10; FAIL=1; }
 grep -q chaotic-aur "$CHECK/etc/pacman.conf" && echo "PASS chaotic in live pacman.conf" || { echo "FAIL chaotic missing from pacman.conf"; FAIL=1; }
 [ -f "$CHECK/usr/lib/initcpio/hooks/archiso_bnasec" ] && echo "PASS persist hook baked" || { echo "FAIL persist hook missing"; FAIL=1; }
