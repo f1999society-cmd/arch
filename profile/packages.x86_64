@@ -4,8 +4,18 @@
 # selective home-data persistence (see archiso_bnasec hook + bnasec-persist).
 
 # --------------------------------------------------- base system
+# base-devel is DELIBERATELY not shipped (v2.0.0 size): gcc/binutils/autoconf/
+# bison/flex/groff/libtool/texinfo ≈ 300MB of tree for a live session where
+# nothing compiles. The light runtime tools are listed explicitly instead —
+# make/gawk stay for scripts that exec them.
 base
-base-devel
+make
+gawk
+patch
+pkgconf
+which
+gettext
+m4
 linux
 # split firmware subsets: the full linux-firmware bundle is ~700MB installed.
 # intel/realtek/atheros/mediatek cover wifi; amdgpu covers AMD GPUs (v1.2.1 lesson)
@@ -52,6 +62,8 @@ hypridle
 hyprsunset
 hyprshutdown
 xdg-user-dirs
+hyprlock
+hyprpicker
 xdg-desktop-portal-hyprland
 xdg-desktop-portal-gtk
 xorg-xwayland
@@ -101,7 +113,6 @@ wlogout
 kitty
 thunar
 tumbler
-ffmpegthumbs
 file-roller
 grim
 slurp

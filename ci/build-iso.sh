@@ -537,6 +537,7 @@ tail -60 /tmp/mkarchiso.log
 ISO=$(find "$ISO_TMP" -maxdepth 1 -name '*.iso' | head -1)
 [ -n "$ISO" ] || { echo "no ISO produced"; exit 1; }
 echo "ISO: $ISO ($(du -h "$ISO" | cut -f1))"
+echo "sfs: $(find "$WORK" -name 'airootfs.sfs' -exec du -h {} \; 2>/dev/null | head -1)"
 # fail FAST on GitHub's hard release-asset cap instead of burning 25 minutes of
 # boot tests before the 422 (run 36197875432)
 [ "$(stat -c%s "$ISO")" -lt 2147483648 ] \
@@ -564,7 +565,7 @@ FAIL=0
 [ -d "$CHECK/home/bna/.local/share/ml4w-dotfiles-settings" ] && echo "PASS ML4W settings app baked" || { echo "FAIL ml4w-dotfiles-settings missing"; FAIL=1; }
 [ -d "$CHECK/home/bna/.local/share/ml4w-dock" ] && echo "PASS ML4W dock baked" || { echo "FAIL ml4w-dock missing"; FAIL=1; }
 [ -d "$CHECK/home/bna/.local/share/quickshell-overview" ] && echo "PASS quickshell overview baked" || { echo "FAIL quickshell-overview missing"; FAIL=1; }
-[ -x "$CHECK/usr/local/bin/bnasec-persist-bind" ] && echo "PASS persist-bind script baked" || { echo "FAIL bnasec-persist-bind missing"; FAIL=1; }
+[ -x "$CHECK/usr/local/bin/bnasec-persist-bind" ] && echo "PASS persist-bind script baked" || { echo "FAIL bnasec-persist-bind missing/not-exec — context:"; ls -la "$CHECK/usr/local/bin/" 2>&1; unsquashfs -ll "$SFS" 2>/dev/null | grep -E 'usr/local/bin' | head; FAIL=1; }
 [ -f "$CHECK/etc/systemd/system/bnasec-persist.service" ] && [ -L "$CHECK/etc/systemd/system/multi-user.target.wants/bnasec-persist.service" ] && echo "PASS persist service enabled" || { echo "FAIL bnasec-persist.service not enabled"; FAIL=1; }
 [ -x "$CHECK/usr/local/bin/bnasec-toolbox" ] && echo "PASS toolbox baked" || { echo "FAIL toolbox missing/not-exec — context:"; ls -la "$CHECK/usr/local/bin/" 2>&1; cat "$CHECK/usr/share/bnasec/BUILD-INFO" 2>&1; unsquashfs -ll "$SFS" 2>/dev/null | grep -E 'usr/local|BUILD-INFO' | head -10; FAIL=1; }
 grep -q chaotic-aur "$CHECK/etc/pacman.conf" && echo "PASS chaotic in live pacman.conf" || { echo "FAIL chaotic missing from pacman.conf"; FAIL=1; }
