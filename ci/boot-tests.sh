@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
-# bnasec 1.2.0 boot tests — run INSIDE the build container after build-iso.sh.
+# bnasec 2.0.0 boot tests — run INSIDE the build container after build-iso.sh.
 #
 #   T1  BIOS default (persistent) boot from a dd'd USB image:
-#       - persistence partition auto-created on first boot
-#       - graphical session reached
-#   T2  persistence proof: marker written INSIDE boot 1 is read back in boot 2
-#   T3  RAM-only session boots volatile
+#       - persistence data partition auto-created on first boot (ext4)
+#       - volatile overlay root + selective home-data binds
+#       - autologin -> Hyprland session (no display manager)
+#   T2  selective persistence proof: markers written INSIDE boot 1 to
+#       /home/bna/.config and /home/bna/Documents are read back in boot 2
+#   T3  RAM-only session boots volatile and never touches the stick
 #   T4  UEFI boot via OVMF reaches the session
 #
 # Every test drives the guest over the serial console (console=ttyS0, serial
@@ -14,7 +16,7 @@
 #
 # Each run also exposes a QEMU monitor unix socket; a background scheduler
 # fires HMP 'screendump' at scheduled offsets so the VGA surface (syslinux
-# menu, boot, sddm/HyDE session) is captured as screenshots for the user.
+# menu, boot, ML4W session) is captured as screenshots for the user.
 # Shots are strictly best-effort: a failed screenshot never fails a test.
 #
 set -uo pipefail
@@ -153,16 +155,13 @@ sched_shots 4:t1-01-menu 9:t1-02-menu 25:t1-03-early $((BOOT_WAIT/2)):t1-04-mid 
 { sleep "$BOOT_WAIT"; \
   echo "printf 'BNA_SHELL_READY_%s\\n' T1"; sleep "$CMD_WAIT"; \
   echo "findmnt -n -o FSTYPE /"; sleep 8; \
-  echo "printf 'BNA_SDDM_%s\\n' \"\$(systemctl is-active sddm 2>&1)\""; sleep 6; \
+  echo "printf 'BNA_PERSIST_MNT_%s\\n' \"\$(findmnt -n -o FSTYPE /var/lib/bnasec-persist 2>/dev/null)\""; sleep 6; \
+  echo "printf 'BNA_PERSIST_SVC_%s\\n' \"\$(systemctl is-active bnasec-persist 2>&1)\""; sleep 6; \
+  echo "findmnt -n -o SOURCE /home/bna/.config 2>/dev/null | head -1"; sleep 5; \
   echo "printf 'BNA_HYP_%s\\n' \"\$(pgrep -c Hyprland 2>/dev/null)\""; sleep 6; \
+  echo "printf 'BNA_QS_%s\\n' \"\$(pgrep -fc quickshell 2>/dev/null)\""; sleep 6; \
   echo "ls -l /dev/dri/"; sleep 3; \
-  echo "pacman -Qq | grep -E '^(mesa|vulkan-|qt6-)' | head -8"; sleep 4; \
-  echo "journalctl -b --no-pager -u sddm | tail -8"; sleep 5; \
-  echo "echo bnasec | sudo -S sh -c 'mkdir -p /etc/sddm.conf.d; printf \"[Autologin]\\nUser=bna\\nSession=hyprland.desktop\\n\" > /etc/sddm.conf.d/zz-ci-autologin.conf; cat /etc/sddm.conf.d/zz-ci-autologin.conf'"; sleep 6; \
-  echo "echo bnasec | sudo -S systemctl restart sddm"; sleep "$AUTOWAIT"; \
-  echo "printf 'BNA_HYP2_%s\\n' \"\$(pgrep -c Hyprland 2>/dev/null)\""; sleep 8; \
-  echo "pgrep -a Hyprland | head -2"; sleep 3; \
-  echo "tail -40 /tmp/hypr/*/hyprland.log 2>/dev/null | grep -iE 'backend|egl|output|gpu|drm|swrast' | head -12"; sleep 4; \
+  echo "tail -30 /tmp/hypr/*/hyprland.log 2>/dev/null | grep -iE 'backend|egl|output|gpu|drm|swrast' | head -12"; sleep 4; \
   echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
     -serial stdio > "$TESTS/t1-serial.log" 2>&1
 end_shots
@@ -181,9 +180,16 @@ grep -aq "BNA_SHELL_READY_T1" "$TESTS/t1-serial.log" \
 # which is exactly how T1d false-failed (run 36184894405). Grep the log
 # directly: no other serial content says 'overlay'.
 grep -aq "overlay" "$TESTS/t1-serial.log" \
-  && ok "T1d root is overlay (persistent upperdir)" || bad "T1d overlay root" "$TESTS/t1-serial.log"
+  && ok "T1d root is volatile overlay (packages reset each boot)" || bad "T1d overlay root" "$TESTS/t1-serial.log"
+grep -aq "BNA_PERSIST_MNT_ext4" "$TESTS/t1-serial.log" \
+  && ok "T1e persistence data partition mounted (ext4)" || bad "T1e persist mount" "$TESTS/t1-serial.log"
+grep -aq "BNA_PERSIST_SVC_active" "$TESTS/t1-serial.log" \
+  && ok "T1f selective persist service active" || bad "T1f persist service" "$TESTS/t1-serial.log"
+grep -aq "/var/lib/bnasec-persist/home/bna/.config" "$TESTS/t1-serial.log" \
+  && ok "T1g .config bound from stick" || bad "T1g bind .config" "$TESTS/t1-serial.log"
+grep -aq "BNA_QS_" "$TESTS/t1-serial.log" && ok "T1h quickshell probe answered" || ok "T1h quickshell probe inconclusive"
 # report-only: does the graphical stack actually come up inside the guest?
-echo "T1 graphical probe: $(grep -ao 'BNA_SDDM_[a-z]*' "$TESTS/t1-serial.log" | tail -1) $(grep -ao 'BNA_HYP_[0-9]*' "$TESTS/t1-serial.log" | tail -1) hyde-after-autologin: $(grep -ao 'BNA_HYP2_[0-9]*' "$TESTS/t1-serial.log" | tail -1)"
+echo "T1 graphical probe: $(grep -ao 'BNA_HYP_[0-9]*' "$TESTS/t1-serial.log" | tail -1) quickshell: $(grep -ao 'BNA_QS_[0-9]*' "$TESTS/t1-serial.log" | tail -1) persist: $(grep -ao 'BNA_PERSIST_SVC_[a-z]*' "$TESTS/t1-serial.log" | tail -1)"
 
 # ================= T2: persistence proof across two boots =================
 echo "== T2: persistence proof =="
@@ -191,40 +197,48 @@ MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
 sched_shots 25:t2b1-01-early $((BOOT_WAIT/2)):t2b1-02-mid \
   $((BOOT_WAIT+CMD_WAIT+5)):t2b1-03-session $((BOOT_WAIT+CMD_WAIT+13)):t2b1-04-proof \
   $((BOOT_WAIT+CMD_WAIT+40)):t2b1-05-hyde
-PERSIST_APPEND="archisobasedir=arch archisolabel=BNASEC_120 cow_label=persistence cow_directory=persist console=ttyS0,115200n8 quiet loglevel=3"
+PERSIST_APPEND="archisobasedir=arch archisolabel=BNASEC200 console=ttyS0,115200n8 quiet loglevel=3"
 { sleep "$BOOT_WAIT"; \
-  echo "echo bnasec | sudo -S sh -c \"printf 'BNA_PERSIST_PROOF_%s\\n' 120 > /var/lib/persist-proof\""; sleep "$CMD_WAIT"; \
-  echo "cat /var/lib/persist-proof"; sleep 8; \
+  echo "printf 'BNA_T2_MOUNTED_%s\\n' \"\$(findmnt -n -o FSTYPE /var/lib/bnasec-persist 2>/dev/null)\""; sleep 6; \
+  echo "echo bnasec | sudo -S sh -c \"printf 'BNA_PERSIST_PROOF_%s\\n' 120 > /home/bna/.config/bnasec-proof\""; sleep "$CMD_WAIT"; \
+  echo "echo bnasec | sudo -S sh -c \"printf 'BNA_DOCS_PROOF_%s\\n' 120 > /home/bna/Documents/bnasec-proof\""; sleep "$CMD_WAIT"; \
+  echo "cat /home/bna/.config/bnasec-proof"; sleep 8; \
   echo "printf 'BNA_T2_WROTE_%s\\n' ok"; sleep "$CMD_WAIT"; \
   echo "echo bnasec | sudo -S systemctl poweroff --no-wall"; sleep "$CMD_WAIT"; } | \
   Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
     "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t2-boot1.log" 2>&1
 end_shots
 grep -aq "BNA_T2_WROTE_ok" "$TESTS/t2-boot1.log" \
-  && ok "T2a marker written inside live session" || bad "T2a write" "$TESTS/t2-boot1.log"
+  && ok "T2a markers written inside live session" || bad "T2a write" "$TESTS/t2-boot1.log"
 
 sched_shots 25:t2b2-01-early $((BOOT_WAIT/2)):t2b2-02-mid \
   $((BOOT_WAIT+12)):t2b2-03-proof-read $((BOOT_WAIT+CMD_WAIT+2)):t2b2-04-late
 { sleep "$BOOT_WAIT"; \
-  echo "cat /var/lib/persist-proof"; sleep 8; \
+  echo "cat /home/bna/.config/bnasec-proof"; sleep 8; \
+  echo "cat /home/bna/Documents/bnasec-proof"; sleep 8; \
   echo "echo BNA_T2_READ"; sleep "$CMD_WAIT"; \
   echo "echo bnasec | sudo -S systemctl poweroff --no-wall"; sleep "$CMD_WAIT"; } | \
   Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
     "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t2-boot2.log" 2>&1
 end_shots
 grep -aq "BNA_PERSIST_PROOF_120" "$TESTS/t2-boot2.log" \
-  && ok "T2b marker survived reboot — PERSISTENCE PROVEN" || bad "T2b persistence proof" "$TESTS/t2-boot2.log"
+  && ok "T2b .config marker survived reboot — PERSISTENCE PROVEN" || bad "T2b persistence proof" "$TESTS/t2-boot2.log"
+grep -aq "BNA_DOCS_PROOF_120" "$TESTS/t2-boot2.log" \
+  && ok "T2c Documents marker survived reboot" || bad "T2c Documents proof" "$TESTS/t2-boot2.log"
 
 # ================= T3: RAM-only volatile session =================
 echo "== T3: RAM-only session =="
 sched_shots 25:t3-01-early $((BOOT_WAIT/2)):t3-02-mid $((BOOT_WAIT+10)):t3-03-session
-{ sleep "$BOOT_WAIT"; echo "printf 'BNA_T3_VOLATILE_%s\\n' ok"; sleep "$CMD_WAIT"; } | \
+{ sleep "$BOOT_WAIT"; echo "printf 'BNA_T3_VOLATILE_%s\\n' ok"; sleep "$CMD_WAIT"; \
+  echo "printf 'BNA_T3_NOTMOUNTED_%s\\n' \"\$(findmnt -n -o FSTYPE /var/lib/bnasec-persist 2>/dev/null)\""; sleep 6; } | \
   Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" \
-    -append "archisobasedir=arch archisolabel=BNASEC_120 console=ttyS0,115200n8 quiet loglevel=3" \
+    -append "archisobasedir=arch archisolabel=BNASEC200 bnasec_nopersist console=ttyS0,115200n8 quiet loglevel=3" \
     "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t3-serial.log" 2>&1
 end_shots
 grep -aq "BNA_T3_VOLATILE_ok" "$TESTS/t3-serial.log" \
   && ok "T3 volatile session boots" || bad "T3 volatile" "$TESTS/t3-serial.log"
+grep -aq "bnasec: RAM-only session — persistence partition untouched" "$TESTS/t3-serial.log" \
+  && ok "T3 stick untouched in RAM-only mode" || bad "T3 RAM-only flag" "$TESTS/t3-serial.log"
 grep -aq "bnasec: persistence unavailable" "$TESTS/t3-serial.log" \
   && bad "T3 fell back unexpectedly" "$TESTS/t3-serial.log" || ok "T3 no persistence requested (correct)"
 

@@ -1,28 +1,21 @@
-# bnasec 1.2.0 — airootfs package list
-# Every name here is validated against configured repos (core/extra/multilib/chaotic-aur)
-# by ci/build-iso.sh BEFORE the heavy build starts.
+# bnasec 2.0.0 — Arch + Hyprland + ML4W dotfiles (mylinuxforwork/dotfiles 2.16)
+# Every name is validated against configured repos by ci/build-iso.sh BEFORE
+# the heavy build starts. Design: read-only root (no package rot, ever) +
+# selective home-data persistence (see archiso_bnasec hook + bnasec-persist).
 
 # --------------------------------------------------- base system
 base
-# AUR coverage: prebuilt via chaotic-aur (no compile needed on the stick)
-chaotic-keyring
-chaotic-mirrorlist
-paru
 base-devel
 linux
-# split firmware subsets: the full linux-firmware bundle is ~700MB installed and
-# the runner SSD budget is ~14GB; realtek/atheros/mediatek cover USB-wifi dongles,
-# intel covers laptop wifi
+# split firmware subsets: the full linux-firmware bundle is ~700MB installed.
+# intel/realtek/atheros/mediatek cover wifi; amdgpu covers AMD GPUs (v1.2.1 lesson)
 linux-firmware-realtek
 linux-firmware-atheros
 linux-firmware-mediatek
 linux-firmware-intel
-# AMD GPU firmware: without it amdgpu never creates /dev/dri on real AMD
-# hardware -> black screen (the 1.2.0 subsets only covered wifi)
 linux-firmware-amdgpu
 mkinitcpio
 mkinitcpio-archiso
-# BIOS boot loader (profiledef.sh: bios.syslinux) — mkarchiso validates its presence
 syslinux
 e2fsprogs
 zram-generator
@@ -33,7 +26,6 @@ wget
 unzip
 vim
 jq
-parallel
 pacman-contrib
 usbutils
 pciutils
@@ -42,88 +34,88 @@ ntfs-3g
 exfatprogs
 qemu-guest-agent
 reflector
+parted
 
 # --------------------------------------------------- network
 networkmanager
 wpa_supplicant
 network-manager-applet
+nm-connection-editor
 bluez
 bluez-utils
-blueman
 openssh
 
-# --------------------------------------------------- Hyprland desktop (HyDE core)
+# --------------------------------------------------- Hyprland session
 hyprland
 uwsm
-hyprlock
 hypridle
 hyprsunset
-hyprpicker
-hyprpolkitagent
-hyprquery-git
-awww
-waybar
-dunst
-rofi
-wlogout
-grim
-slurp
-satty
-cliphist
-wl-clip-persist
+hyprshutdown
+xdg-user-dirs
 xdg-desktop-portal-hyprland
 xdg-desktop-portal-gtk
-xdg-user-dirs
 xorg-xwayland
-# 'electron' moved to DEEZ_OMIT (ci/build-iso.sh): ~330MiB installed for one
-# deez extra-dots dep. The container gets an empty stub so deez's 'pacman -Q'
-# check passes; on the stick first-run deez offers the real package (network).
+polkit-gnome
+gvfs-mtp
+
+# --------------------------------------------------- ML4W dependency list (2.16)
+# from setup/dependencies/packages-arch — all in official extra now
+libnotify
+qt5-wayland
+qt6-wayland
+gnome-themes-extra
+python-pip
+python-pipx
+python-gobject
+python-screeninfo
+imagemagick
+loupe
+power-profiles-daemon
 swaync
+tesseract-data-eng
+otf-font-awesome
+ttf-firacode-nerd
+ttf-jetbrains-mono-nerd
+qt6-svg
+qt6-virtualkeyboard
+qt6-multimedia-ffmpeg
+quickshell
+awww
+matugen
+nwg-displays
+ttf-font-awesome
+ttf-nerd-fonts-symbols
+noto-fonts-emoji
+noto-fonts
+bibata-cursor-theme
+grimblast-git
+
+# --------------------------------------------------- ML4W companion tooling
+# settings app setup.sh needs gum; build-tooling preinstalled
+gum
+make
+awk
+
+# --------------------------------------------------- desktop utilities
+rofi
+wlogout
+kitty
+thunar
+tumbler
+ffmpegthumbs
+file-roller
+grim
+slurp
+cliphist
+wl-clip-persist
 brightnessctl
 playerctl
-udiskie
-libnotify
-noto-fonts
-noto-fonts-emoji
-lua
-luarocks
-nwg-look
-nwg-displays
-# qt5 stack removed (~250MiB installed / ~60-70MiB compressed): sddm, dolphin,
-# kvantum and Hyde are all qt6 now — nothing on the ISO runs qt5 anymore.
-# Reinstall on the stick if ever needed: sudo pacman -S qt5ct kvantum-qt5
-qt6ct
-kvantum
-qt6-wayland
-
-# --------------------------------------------------- applications
-firefox
-kitty
 fastfetch
-dolphin
-ark
-# qt5-imageformats removed with the qt5 stack
-ffmpegthumbs
-kde-cli-tools
-kimageformats
-fzf
 btop
-cava
-wf-recorder
-# 'code' (VS Code, 823MiB installed + electron42 332MiB) removed: GitHub release
-# assets are capped at 2GiB and the ISO must stay under it. Reinstallable on the
-# stick anytime: sudo pacman -S code
-spotify-launcher
+firefox
 
-# --------------------------------------------------- shell (HyDE: zsh + starship)
+# --------------------------------------------------- shell
 zsh
-# fish removed (~7MiB compressed) for the 2GiB release cap — zsh is the login
-# shell; fish is one 'sudo pacman -S fish' away
-starship
-
-# --------------------------------------------------- Hyde python tooling (deez dots manager)
-python
-python-pip
 
 # --------------------------------------------------- audio
 pipewire
@@ -138,12 +130,3 @@ pamixer
 sof-firmware
 alsa-ucm-conf
 alsa-utils
-
-# --------------------------------------------------- display manager
-sddm
-# qt5-quickcontrols/quickcontrols2/graphicaleffects were for old qt5 sddm
-# themes — sddm 0.21 on Arch is qt6; removed with the qt5 stack
-
-# --------------------------------------------------- imaging / media
-imagemagick
-ffmpeg

@@ -58,8 +58,10 @@ fs-type = swap
 EOF
 
 # /run/persist convenience path for toolbox v1.7 space_rescue/doctor expectations
+# (v2.0.0: the ext4 data partition mounts at /var/lib/bnasec-persist — initcpio
+# hook mounts it before switch_root; cowspace is now volatile RAM-only)
 cat > "$A/etc/tmpfiles.d/bnasec-persist.conf" <<'EOF'
-L+ /run/persist - - - - /run/archiso/cowspace/persist
+L+ /run/persist - - - - /var/lib/bnasec-persist
 EOF
 
 # ---- login
@@ -70,14 +72,15 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin bna --noclear %I 115200,38400,9600 vt100
 EOF
 
-# ---- enable services (sddm greeter, networking, bluetooth, ssh off by default)
-mkdir -p "$A/etc/systemd/system/multi-user.target.wants" "$A/etc/systemd/system/sockets.target.wants" "$A/etc/systemd/system/display-manager.service.d"
+# ---- enable services (networking, bluetooth, selective persistence; NO display
+# ---- manager — v2.0.0 autologins on tty1 and .zprofile starts Hyprland)
+mkdir -p "$A/etc/systemd/system/multi-user.target.wants" "$A/etc/systemd/system/sockets.target.wants"
 ln -sfn /usr/lib/systemd/system/NetworkManager.service      "$A/etc/systemd/system/multi-user.target.wants/NetworkManager.service"
 ln -sfn /usr/lib/systemd/system/bluetooth.service           "$A/etc/systemd/system/multi-user.target.wants/bluetooth.service"
-ln -sfn /usr/lib/systemd/system/sddm.service                "$A/etc/systemd/system/display-manager.service"
 ln -sfn /usr/lib/systemd/system/systemd-timesyncd.service   "$A/etc/systemd/system/multi-user.target.wants/systemd-timesyncd.service"
+ln -sfn ../bnasec-persist.service                           "$A/etc/systemd/system/multi-user.target.wants/bnasec-persist.service"
 
-# ---- sddm: Hyde's install_pst.sh writes the theme conf into /etc/sddm.conf.d at build
+# ---- v2.0.0: no display manager, no sddm — autologin + .zprofile handle the session
 # ---- resolv.conf managed by systemd-resolved? NM+resolved: stub symlink
 rm -f "$A/etc/resolv.conf"
 ln -sfn ../run/systemd/resolve/stub-resolv.conf "$A/etc/resolv.conf"

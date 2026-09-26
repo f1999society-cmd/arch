@@ -462,6 +462,31 @@ archiso_mount_handler() {
         _mnt_overlayfs "/run/archiso/airootfs" "${newroot}" "/"
     fi
 
+    # ---------------------------------------------------------------------------
+    # bnasec selective persistence (v2.0.0): the root is intentionally VOLATILE
+    # (no cow_device anywhere — packages reset to ISO state every boot, which
+    # kills the 1.1.x package rot permanently). Instead, the ext4 data partition
+    # (label 'persistence', auto-created on first boot by bnasec_ensure_persist)
+    # is mounted at /var/lib/bnasec-persist; bnasec-persist.service then seeds +
+    # bind-mounts ONLY the user data dirs (.mozilla .config .local/share
+    # Documents Downloads Pictures) over the live home. RAM-only sessions pass
+    # bnasec_nopersist and never touch the stick.
+    # ---------------------------------------------------------------------------
+    if [ -z "$(getarg 'bnasec_nopersist')" ]; then
+        if bnasec_ensure_persist; then
+            mkdir -p "${newroot}/var/lib/bnasec-persist"
+            if mount -o rw /dev/disk/by-label/persistence "${newroot}/var/lib/bnasec-persist"; then
+                bnasec_msg ":: bnasec: data partition mounted at /var/lib/bnasec-persist (selective persistence)"
+            else
+                bnasec_msg ":: bnasec: data partition mount failed — session stays volatile"
+            fi
+        else
+            bnasec_msg ":: bnasec: persistence unavailable — session stays volatile"
+        fi
+    else
+        bnasec_msg ":: bnasec: RAM-only session — persistence partition untouched"
+    fi
+
     if [ "${copytoram}" = "y" ]; then
         umount -d /run/archiso/bootmnt
         rmdir /run/archiso/bootmnt

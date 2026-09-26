@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 #
-# bnasec 1.2.0 ISO build — runs INSIDE an archlinux:base-devel container.
+# bnasec 2.0.0 ISO build — runs INSIDE an archlinux:base-devel container.
+# Desktop: Arch + Hyprland + ML4W dotfiles 2.16 (github.com/mylinuxforwork).
+# Persistence: SELECTIVE — read-only root (no package rot) + ext4 data
+# partition bind-mounted for Firefox/settings/config/user files only.
 #
 #   1. validate every package name in packages.x86_64 against the repos (fail fast)
 #   2. bootstrap chaotic-aur in the container (prebuilt AUR coverage)
 #   3. install the full package list into the container (validates + preinstalls)
-#   4. create user bna and run the Hyde installer (github.com/Hyde-project/HyDE)
-#   5. collect Hyde output (home dots, sddm theme, fonts, cursors) into the profile
+#   4. create user bna and bake the ML4W dotfiles + companion quickshell apps
+#   5. collect ML4W home into the profile
 #   6. mkarchiso → ISO
-#   7. post-build assertions (Hyde configs baked, toolbox baked, sudo setuid intact)
+#   7. post-build assertions (ML4W baked, persistence units baked, sudo setuid)
 #
 set -euo pipefail
 
@@ -16,7 +19,10 @@ PROFILE=/__w/arch/arch/profile     # actions checkout path, override via PROFILE
 PROFILE_DIR="${PROFILE_DIR:-$PROFILE}"
 WORK="${WORK_DIR:-$PWD/bnasec-build-work}"
 OUT="${OUT_DIR:-$PWD/bnasec-build-out}"
-HYDE_REPO="https://github.com/HyDE-project/HyDE"
+ML4W_REPO="https://github.com/mylinuxforwork/dotfiles"
+ML4W_SETTINGS_REPO="https://github.com/mylinuxforwork/ml4w-dotfiles-settings"
+ML4W_OVERVIEW_REPO="https://github.com/mylinuxforwork/ml4w-quickshell-overview"
+ML4W_DOCK_REPO="https://github.com/mylinuxforwork/ml4w-dock"
 
 mkdir -p "$WORK" "$OUT"
 cd "$(dirname "$0")/.."
@@ -136,51 +142,6 @@ EOF
   done
 fi
 
-# (c) deez-required-but-intentionally-omitted stubs: Hyde's deps.toml hard-
-# requires this qt5 set (sddm theme ui/effects, dolphin thumbnails, qt theming),
-# but shipping them blows the ISO past GitHub's 2GiB release-asset cap — sddm,
-# dolphin and kvantum itself are qt6 now. Empty stubs satisfy deez's
-# 'pacman -Q <pkg>' dependency check inside the BUILD CONTAINER ONLY: they are
-# never pacstrapped into the airootfs and this repo is not added to the profile
-# pacman.conf. On the live stick, first-boot deez will offer to install the
-# real packages onto the persistence partition.
-# electron: ~330MiB installed / ~120MiB compressed for ONE deez extra-dots dep.
-# Same deal as the qt5 set: stub in the container, real package via deez on the
-# stick. This alone brought v1.2.1 (with linux-firmware-amdgpu) back under 2GiB.
-DEEZ_OMIT=(qt5ct kvantum-qt5 qt5-wayland qt5-imageformats qt5-quickcontrols qt5-quickcontrols2 qt5-graphicaleffects electron)
-LOCALREPO=/tmp/bnasec-localrepo
-mkdir -p "$LOCALREPO"
-STUBBUILT=()
-# explicit high uid: the default would hand builduser 1000, which bna needs
-id builduser >/dev/null 2>&1 || useradd -m -u 1500 builduser
-echo 'builduser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/98-builduser
-chmod 440 /etc/sudoers.d/98-builduser
-for p in "${DEEZ_OMIT[@]}"; do
-  SD="/tmp/shim-$p"; rm -rf "$SD"; mkdir -p "$SD/$p"
-  cat > "$SD/$p/PKGBUILD" <<PKGEOF
-pkgname=$p
-pkgver=1.0
-pkgrel=1
-pkgdesc="bnasec stub: omitted from the ISO for the 2GiB cap (install the real $p on the stick)"
-arch=('any')
-license=('MIT')
-package() { :; }
-PKGEOF
-  chown -R builduser: "$SD"
-  ( cd "$SD/$p" && sudo -u builduser makepkg -f --noconfirm --noprogressbar ) > "/tmp/shim-$p.log" 2>&1 || { echo "stub build failed for $p:"; tail -20 "/tmp/shim-$p.log"; exit 1; }
-  mv "$SD/$p/$p-1.0-1-any.pkg.tar.zst" "$LOCALREPO/"
-  STUBBUILT+=("$LOCALREPO/$p-1.0-1-any.pkg.tar.zst")
-done
-repo-add "$LOCALREPO/bnasec-local.db.tar.gz" "${STUBBUILT[@]}" >> /tmp/repo-add.log 2>&1 || { cat /tmp/repo-add.log; exit 1; }
-grep -q '^\[bnasec-local\]' /etc/pacman.conf || cat >> /etc/pacman.conf <<EOF
-
-[bnasec-local]
-Server = file://${LOCALREPO}
-SigLevel = Never
-EOF
-pacman -Sy --noconfirm >/dev/null
-pacman -S --noconfirm --needed "${DEEZ_OMIT[@]}" >> /tmp/pkg-install.log 2>&1 || { tail -8 /tmp/pkg-install.log; echo "!! stub install failed"; exit 1; }
-echo "deez-omitted stubs installed into container (not the ISO): ${DEEZ_OMIT[*]}"
 echo "all $(echo "$PKGS" | wc -w) packages resolve in repos"
 
 # ------------------------------------------------------------- 3. install full list
@@ -219,20 +180,19 @@ echo "== [3b] size survey (top 25 packages by installed size) =="
 echo "== [3b] biggest /usr trees (MiB) =="
 ( du -xm /usr 2>/dev/null | sort -rn | head -12 ) || true
 
-# ------------------------------------------------------------- 4. user + Hyde
-echo "== [4] creating user bna + installing Hyde =="
+# ------------------------------------------------------------- 4. user + ML4W
+echo "== [4] creating user bna + baking ML4W dotfiles =="
 id bna >/dev/null 2>&1 || useradd -m -u 1000 -s /bin/zsh -G wheel,video,audio,storage,optical,network,users bna
 echo 'bna:bnasec' | chpasswd
 echo 'bna ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/99-bna-build   # container only, never collected
 chmod 440 /etc/sudoers.d/99-bna-build
 
-# systemctl shim (container only): Hyde's restore_svc runs 'systemctl enable --now'
-# which cannot start units without systemd PID 1 — let enable() create the symlinks
-# and pretend the start part succeeded. Never collected into the ISO.
+# systemctl shim (container only): companion installers may run 'systemctl
+# enable --now' which cannot start units without systemd PID 1 — let enable()
+# create the symlinks and pretend the start part succeeded. Never collected.
 mv /usr/bin/systemctl /usr/bin/systemctl.real
 cat > /usr/bin/systemctl <<'EOF'
 #!/bin/bash
-# bnasec build shim: allow enable (symlink creation) but fake runtime verbs
 args=()
 now=0
 for a in "$@"; do
@@ -249,121 +209,83 @@ case "${args[0]:-}" in
 esac
 EOF
 chmod +x /usr/bin/systemctl
-ls -la /usr/bin/systemctl /usr/bin/systemctl.real
 
 # containers get finicky about ownership (actions mounts, sudo env) — whitelist
-# at the SYSTEM level so both root and bna pass safe.directory checks (per-user
-# config is not enough: the clone/create user and the checking user can differ)
+# at the SYSTEM level so both root and bna pass safe.directory checks
 git config --system --add safe.directory '*' || true
-chown -R bna:bna /home/bna
-sudo -u bna -H git config --global --add safe.directory '*'
-sudo -u bna -H git clone --depth 1 "$HYDE_REPO" /home/bna/HyDE 2>&1 | tail -1
-HYDE_HEAD=$(git -C /home/bna/HyDE rev-parse --short HEAD)
-echo "Hyde @ $HYDE_HEAD"
-
-echo "-- running Hyde installer (non-interactive flags; stdin EOF walks prompts to defaults) --"
-# Container has no logind, so /run/user/1000 never exists. Hyde's globalcontrol.sh
-# (sourced by theme.patch.sh, cache.sh, theme.switch.sh) hard-fails without it:
-#   mkdir: cannot create directory '/run/user/1000': Permission denied
-#   -> "Error: unable to source globalcontrol.sh" -> every theme import fails
-#   -> "Wallpaper cache was not generated" + "Theme colour state was not generated"
-#   -> theme_failed=1 -> install.sh exit 1. Pre-create it and pin XDG_RUNTIME_DIR.
+# XDG runtime dir: qs/quickshell tooling in the companion installers wants it
 mkdir -p /run/user/1000
 chown bna:bna /run/user/1000
 chmod 700 /run/user/1000
-# Pre-answer Hyde's sddm theme prompt deterministically. install_pst.sh asks via a
-# bare `read -p` which kills install.sh under set -e when stdin hits EOF (this is
-# what ended runs 8574ce3/9af4eb7 right after the theme step). With the backup
-# marker present the whole prompt block is skipped, so extract Corners + write the
-# exact files the prompt path would have written (backup stays empty like Hyde).
-mkdir -p /usr/share/sddm/themes /etc/sddm.conf.d /usr/share/sddm/faces
-if [ ! -d /usr/share/sddm/themes/Corners ]; then
-  tar -xzf /home/bna/HyDE/Source/arcs/Sddm_Corners.tar.gz -C /usr/share/sddm/themes/
-fi
-: > /etc/sddm.conf.d/the_hyde_project.conf
-: > /etc/sddm.conf.d/backup_the_hyde_project.conf
-cp /usr/share/sddm/themes/Corners/the_hyde_project.conf /etc/sddm.conf.d/the_hyde_project.conf
-mkdir -p /usr/share/sddm/faces
-echo "sddm Corners pre-seeded (prompt will be skipped)"
-set +e
-timeout 3600 sudo -u bna -H env XDG_RUNTIME_DIR=/run/user/1000 bash -lc 'cd ~/HyDE/Scripts && ./install.sh -d -r -s -n' < /dev/null > /tmp/hyde-install.log 2>&1
-HYDE_RC=$?
-set -e
-echo "hyde installer rc=$HYDE_RC"
-tail -40 /tmp/hyde-install.log
-# install.sh's FINAL prompt ("Do you want to reboot?") is a bare `read` that dies
-# on EOF — after "Installation :: COMPLETED!". Everything substantive (dots, themes,
-# wallpaper cache, sddm, migrations, services) finished by then; the deploy_failed
-# and theme_failed exits fire BEFORE that banner. So gate on the completion marker:
-# present -> accept (a nonzero rc can only come from the reboot read at EOF).
-# print_log emits ANSI codes between the words, so match on the bare "COMPLETED!"
-# token (unique to the success banner in install.sh) instead of the full phrase.
-if ! grep -q "COMPLETED!" /tmp/hyde-install.log; then
-  echo "!! Hyde install did not complete — last 80 lines of log:"
-  tail -80 /tmp/hyde-install.log
-  exit 1
-fi
-[ "$HYDE_RC" = 0 ] || echo "NOTE: rc=$HYDE_RC is the EOF'd final reboot prompt read — installation completed, ignoring"
 
-# ------------------------------------------------------------- 5. collect into profile
-echo "== [5] collecting Hyde output into the profile =="
+run_as_bna() { sudo -u bna -H env XDG_RUNTIME_DIR=/run/user/1000 "$@"; }
+
+# pin the 2.16 stable tag; fall back to main if the tag ever moves
+sudo -u bna -H git clone --depth 1 --branch 2.16 "$ML4W_REPO" /home/bna/.ml4w-src 2>/dev/null \
+  || sudo -u bna -H git clone --depth 1 "$ML4W_REPO" /home/bna/.ml4w-src
+ML4W_HEAD=$(git -C /home/bna/.ml4w-src rev-parse --short HEAD)
+echo "ML4W dotfiles @ $ML4W_HEAD"
+# sync the dots (the .dotinst 'subfolder' — plain copy; /home/bna holds nothing
+# else at this point, so there is nothing to conflict)
+sudo -u bna -H cp -a /home/bna/.ml4w-src/dotfiles/. /home/bna/
+echo "dots synced: $(find /home/bna -mindepth 1 -maxdepth 1 | wc -l) top-level entries"
+
+# companion quickshell apps — the panels from the target screenshot:
+#   ml4w-dotfiles-settings -> right-side Settings panel + Welcome app
+#   quickshell-overview    -> SUPER-TAB window overview
+#   ml4w-dock              -> bottom dock
+echo "-- ml4w-dotfiles-settings --"
+run_as_bna git clone --depth 1 "$ML4W_SETTINGS_REPO" /tmp/ml4w-settings
+run_as_bna bash /tmp/ml4w-settings/setup.sh > /tmp/ml4w-settings-install.log 2>&1 \
+  || { echo "!! ml4w-dotfiles-settings setup failed:"; tail -20 /tmp/ml4w-settings-install.log; exit 1; }
+tail -2 /tmp/ml4w-settings-install.log
+echo "-- quickshell-overview --"
+run_as_bna git clone --depth 1 "$ML4W_OVERVIEW_REPO" /tmp/ml4w-overview
+run_as_bna bash /tmp/ml4w-overview/install.sh > /tmp/ml4w-overview-install.log 2>&1 \
+  || { echo "!! quickshell-overview install failed:"; tail -20 /tmp/ml4w-overview-install.log; exit 1; }
+echo "-- ml4w-dock --"
+run_as_bna git clone --depth 1 "$ML4W_DOCK_REPO" /tmp/ml4w-dock
+run_as_bna bash /tmp/ml4w-dock/install.sh > /tmp/ml4w-dock-install.log 2>&1 \
+  || { echo "!! ml4w-dock install failed:"; tail -20 /tmp/ml4w-dock-install.log; exit 1; }
+echo "companion apps: $(ls /home/bna/.local/share/ 2>/dev/null | tr '\n' ' ')"
+
+# prompt engine (post.sh) — ohmyposh into ~/.local/bin (non-fatal on failure)
+run_as_bna bash -c 'curl -s https://ohmyposh.dev/install.sh | bash -s -- -d ~/.local/bin' \
+  > /tmp/ohmyposh-install.log 2>&1 || echo "WARN: ohmyposh install failed (non-fatal)"
+# firefox theming bridge (post-arch.sh) — pipx is from the deps list
+run_as_bna pipx install pywalfox > /tmp/pipx.log 2>&1 || echo "WARN: pywalfox pipx failed (non-fatal)"
+run_as_bna bash -c 'command -v pywalfox >/dev/null && pywalfox-install' >> /tmp/pipx.log 2>&1 || true
+
+# cursors ship as the bibata package (setup/_cursors.sh only downloads tarballs)
+pacman -S --noconfirm --needed bibata-cursor-theme grimblast-git >> /tmp/pkg-install.log 2>&1 \
+  || { echo "!! bibata/grimblast install failed:"; tail -10 /tmp/pkg-install.log; exit 1; }
+
+# first-boot look: preseed the wallpaper cache so ml4w-autostart applies the
+# ML4W default wallpaper + matugen theming immediately on first login
+run_as_bna bash -c 'mkdir -p ~/.cache/ml4w/hyprland-dotfiles && printf "%s" "$HOME/.config/ml4w/wallpapers/default.jpg" > ~/.cache/ml4w/hyprland-dotfiles/current_wallpaper'
+run_as_bna xdg-user-dirs-update || true
+
+# clone dirs and caches never enter the ISO
+rm -rf /home/bna/.ml4w-src /home/bna/.cache /tmp/ml4w-settings /tmp/ml4w-overview /tmp/ml4w-dock
+chown -R bna:bna /home/bna
+echo "home ready: $(du -sh /home/bna | cut -f1)"
+
+# ------------------------------------------------------------- 5. collect ML4W output into the profile
+echo "== [5] collecting ML4W output into the profile =="
 A="$PROFILE_DIR/airootfs"
-mkdir -p "$A/home/bna" "$A/etc/sddm.conf.d" "$A/usr/share/sddm/themes"
+mkdir -p "$A/home/bna"
 
-# dots: everything in bna's home except the clone + transient venvs/caches
-rm -rf /home/bna/HyDE /home/bna/.local/state/hyde/python_env
-# .cache holds the themepatcher clones (~full theme branches x12) and install logs —
-# tens of MB to GB of dead weight; it is tmpfs-shadowed at runtime anyway (fstab)
-du -sh /home/bna/.cache 2>/dev/null || true
-rm -rf /home/bna/.cache
-# keep 3 of the 12 Hyde themes — runner SSD (~14GB) + ISO size budget; each theme
-# ships its wallpapers. Dropped ones are re-importable at runtime via themepatcher.
-KEEP_THEMES=("Catppuccin Mocha" "Rosé Pine" "Gruvbox Retro")
-if [ -d /home/bna/.config/hyde/themes ]; then
-  for t in /home/bna/.config/hyde/themes/*; do
-    base=$(basename "$t"); keep=0
-    for k in "${KEEP_THEMES[@]}"; do [ "$base" = "$k" ] && keep=1; done
-    [ "$keep" = 0 ] && rm -rf "$t" && echo "theme trimmed: $base"
-  done
-fi
+# dots: everything in bna's home (clones + caches already removed in [4]).
+# The ML4W wallpaper gallery stays whole — it IS the wallpaper picker content.
 cp -a /home/bna/. "$A/home/bna/"
-# animated-wallpaper videos are the heaviest theme assets and only matter for
-# one cosmetic mode — static wallpapers stay; ISO must fit GitHub's 2GiB
-# release-asset cap (we were 10MiB over, run 41a7949 series)
-find "$A/home/bna/.config/hyde/themes" -type f \( -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' \) -print -delete 2>/dev/null | head -10
-# theme wallpaper galleries: PNG/JPEG files are already compressed, so squashfs
-# gains nothing — every byte here is a byte in the ISO. Keep the DEFAULT theme's
-# gallery fully intact (that is what the user sees on first boot); for every
-# other kept theme, keep any wallpaper referenced by the theme's own config
-# files plus the first 6 (sorted, deterministic), drop the rest. Gallery is
-# scanned dynamically by Super+W, so nothing breaks — the picker just lists
-# fewer entries for the non-default themes.
-DEFAULT_THEME="Catppuccin Mocha"
-for t in "$A/home/bna/.config/hyde/themes"/*; do
-  base=$(basename "$t"); [ -d "$t/wallpapers" ] || continue
-  [ "$base" = "$DEFAULT_THEME" ] && continue
-  n=$(find "$t/wallpapers" -type f | wc -l)
-  [ "$n" -le 6 ] && continue
-  before=$(du -sm "$t/wallpapers" | cut -f1)
-  ref=$(grep -rhoE '[A-Za-z0-9 _().+-]+\.(png|jpe?g|webp|gif|webm|mp4|mkv)' "$t" --include='*.conf' --include='*.toml' --include='*.sh' --include='*.json' 2>/dev/null | sort -u || true)
-  kept=0
-  while IFS= read -r f; do
-    if grep -qxF "$f" <<<"$ref" || [ "$kept" -lt 6 ]; then kept=$((kept+1)); else rm -f -- "$t/wallpapers/$f"; fi
-  done < <(find "$t/wallpapers" -type f -printf '%f\n' | sort)
-  echo "gallery trim '$base': $n -> $kept files (${before}MiB -> $(du -sm "$t/wallpapers" | cut -f1)MiB)"
-done
+echo "collected home: $(du -sh "$A/home/bna" | cut -f1)"
 
-# display manager theme written by install_pst.sh + Hyde theme archives.
 # copy_unowned: copy SRC under DST but SKIP any path owned by the named packages —
 # mkarchiso pacstraps those packages into the airootfs afterwards, and pre-baked
-# package-owned files make pacman abort with "exists in filesystem"
-# (sddm's bundled maya theme was exactly that, run 36136026081).
+# package-owned files make pacman abort with "exists in filesystem".
 copy_unowned() {
   local src="$1" dst="$2"; shift 2
   local owned="/tmp/owned.$$.txt"
-  # strip trailing slashes so DIRECTORY entries match our abs path form; without
-  # this a package-owned dir is cp -a'd whole (recursively dragging its owned
-  # files in) and pacstrap later aborts with "exists in filesystem"
   pacman -Qql "$@" 2>/dev/null | sed 's|/\+$||' | sort -u > "$owned"
   ( cd "$src" && find . -mindepth 1 -printf '%P\n' ) | while IFS= read -r rel; do
     local abs="${src%/}/$rel"
@@ -374,38 +296,6 @@ copy_unowned() {
   done
   rm -f "$owned"
 }
-copy_unowned /etc/sddm.conf.d       "$A/etc/sddm.conf.d"       sddm
-# sddm defaults to an X11 greeter, but this ISO ships NO Xorg — sddm-helper
-# exits 127 (command not found) and the user stares at a black screen forever
-# (run 36220736329 + real-hardware report from the v1.2.0 USB). Run the
-# greeter under Hyprland (wayland display server) instead, and autologin
-# straight into HyDE on boot — the CI autologin trick (HYP2_1) proved this
-# session path works. zz- prefix keeps it last/authoritative vs Hyde confs.
-cat > "$A/etc/sddm.conf.d/zz-bnasec.conf" <<'EOF'
-[General]
-DisplayServer=wayland
-
-[Wayland]
-CompositorCommand=Hyprland
-
-[Autologin]
-User=bna
-Session=hyprland.desktop
-Relogin=false
-EOF
-echo "sddm: wayland greeter + baked autologin written"
-copy_unowned /usr/share/sddm/themes "$A/usr/share/sddm/themes" sddm
-if [ -d /usr/share/sddm/faces ]; then
-  copy_unowned /usr/share/sddm/faces "$A/usr/share/sddm/faces" sddm
-fi
-
-# system-wide fonts/cursors Hyde dropped into /usr/local/share
-if [ -d /usr/local/share/fonts ]; then
-  mkdir -p "$A/usr/local/share/fonts" && cp -a /usr/local/share/fonts/. "$A/usr/local/share/fonts/"
-fi
-if [ -d /usr/local/share/icons ]; then
-  mkdir -p "$A/usr/local/share/icons" && cp -a /usr/local/share/icons/. "$A/usr/local/share/icons/"
-fi
 
 # pacman config for the live system + chaotic mirrorlist
 # (strip the build-only [bnasec-local] file:// repo — it does not exist at runtime)
@@ -421,18 +311,21 @@ echo "locale data: $([ -d "$A/usr/lib/locale" ] && du -sh "$A/usr/lib/locale" | 
 
 # build metadata
 mkdir -p "$A/usr/share/bnasec"
-# the toolbox is the product's spine — verify it is staged BEFORE spending 15
-# minutes of mkarchiso, and print the hash visibly (BUILD-INFO alone hides a
-# failed command substitution inside the heredoc)
 [ -f "$A/usr/local/bin/bnasec-toolbox" ] \
   || { echo "!! bnasec-toolbox missing from profile at collect time:"; ls -laR "$A/usr/local/bin/" 2>&1; exit 1; }
 chmod 755 "$A/usr/local/bin/bnasec-toolbox"
+[ -x "$A/usr/local/bin/bnasec-persist-bind" ] \
+  || { echo "!! bnasec-persist-bind missing from profile:"; ls -la "$A/usr/local/bin/" 2>&1; exit 1; }
+chmod 755 "$A/usr/local/bin/bnasec-persist-bind"
+[ -e "$A/etc/systemd/system/multi-user.target.wants/bnasec-persist.service" ] \
+  || { echo "!! bnasec-persist.service not enabled in profile:"; ls -la "$A/etc/systemd/system/multi-user.target.wants/" 2>&1; exit 1; }
 echo "toolbox staged: $(du -h "$A/usr/local/bin/bnasec-toolbox" | cut -f1) sha12=$(sha256sum "$A/usr/local/bin/bnasec-toolbox" | cut -c1-12)"
 cat > "$A/usr/share/bnasec/BUILD-INFO" <<EOF
-iso: bnasec-arch-1.2.0
+iso: bnasec-arch-2.0.0
 built: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-hyde-commit: $HYDE_HEAD
-hyde-repo: $HYDE_REPO
+ml4w-commit: $ML4W_HEAD
+ml4w-repo: $ML4W_REPO
+persistence: selective (.mozilla .config .local/share Documents Downloads Pictures)
 packages: $(pacman -Qq | wc -l)
 toolbox-sha256-12: $(sha256sum "$A/usr/local/bin/bnasec-toolbox" | cut -c1-12)
 EOF
@@ -654,15 +547,26 @@ SFS=$(find "$WORK" -name 'airootfs.sfs' | head -1)
 CHECK=/tmp/sfs-check
 rm -rf "$CHECK"; mkdir -p "$CHECK"
 unsquashfs -f -d "$CHECK" "$SFS" \
-  'home/bna/.config/hypr' 'usr/local/bin/bnasec-toolbox' \
-  'usr/share/sddm/themes' 'etc/sddm.conf.d' 'etc/pacman.conf' \
+  'home/bna/.config/hypr' 'home/bna/.config/quickshell' 'home/bna/.zprofile' \
+  'home/bna/.local/share/ml4w-dotfiles-settings' 'home/bna/.local/share/ml4w-dock' \
+  'home/bna/.local/share/quickshell-overview' \
+  'usr/local/bin/bnasec-toolbox' 'usr/local/bin/bnasec-persist-bind' \
+  'etc/systemd/system/bnasec-persist.service' \
+  'etc/systemd/system/multi-user.target.wants/bnasec-persist.service' \
+  'etc/pacman.conf' \
   'usr/lib/initcpio/hooks/archiso_bnasec' 'usr/bin/sudo' 'usr/bin/su' \
   'usr/bin/mount' 'usr/bin/passwd' 'usr/share/bnasec' \
   > /tmp/unsquashfs.log 2>&1 || { tail -20 /tmp/unsquashfs.log; exit 1; }
 FAIL=0
 [ -d "$CHECK/home/bna/.config/hypr" ] && echo "PASS hypr dots baked ($(find "$CHECK/home/bna/.config/hypr" -type f | wc -l) files)" || { echo "FAIL hypr dots missing"; FAIL=1; }
+[ -d "$CHECK/home/bna/.config/quickshell" ] && echo "PASS quickshell bar config baked ($(find "$CHECK/home/bna/.config/quickshell" -type f | wc -l) files)" || { echo "FAIL quickshell config missing"; FAIL=1; }
+[ -f "$CHECK/home/bna/.zprofile" ] && echo "PASS autologin session stub baked" || { echo "FAIL .zprofile missing"; FAIL=1; }
+[ -d "$CHECK/home/bna/.local/share/ml4w-dotfiles-settings" ] && echo "PASS ML4W settings app baked" || { echo "FAIL ml4w-dotfiles-settings missing"; FAIL=1; }
+[ -d "$CHECK/home/bna/.local/share/ml4w-dock" ] && echo "PASS ML4W dock baked" || { echo "FAIL ml4w-dock missing"; FAIL=1; }
+[ -d "$CHECK/home/bna/.local/share/quickshell-overview" ] && echo "PASS quickshell overview baked" || { echo "FAIL quickshell-overview missing"; FAIL=1; }
+[ -x "$CHECK/usr/local/bin/bnasec-persist-bind" ] && echo "PASS persist-bind script baked" || { echo "FAIL bnasec-persist-bind missing"; FAIL=1; }
+[ -f "$CHECK/etc/systemd/system/bnasec-persist.service" ] && [ -L "$CHECK/etc/systemd/system/multi-user.target.wants/bnasec-persist.service" ] && echo "PASS persist service enabled" || { echo "FAIL bnasec-persist.service not enabled"; FAIL=1; }
 [ -x "$CHECK/usr/local/bin/bnasec-toolbox" ] && echo "PASS toolbox baked" || { echo "FAIL toolbox missing/not-exec — context:"; ls -la "$CHECK/usr/local/bin/" 2>&1; cat "$CHECK/usr/share/bnasec/BUILD-INFO" 2>&1; unsquashfs -ll "$SFS" 2>/dev/null | grep -E 'usr/local|BUILD-INFO' | head -10; FAIL=1; }
-[ -d "$CHECK/usr/share/sddm/themes/Corners" ] && echo "PASS sddm theme baked" || { echo "FAIL sddm theme missing"; FAIL=1; }
 grep -q chaotic-aur "$CHECK/etc/pacman.conf" && echo "PASS chaotic in live pacman.conf" || { echo "FAIL chaotic missing from pacman.conf"; FAIL=1; }
 [ -f "$CHECK/usr/lib/initcpio/hooks/archiso_bnasec" ] && echo "PASS persist hook baked" || { echo "FAIL persist hook missing"; FAIL=1; }
 # setuid: count only the binaries we deliberately extracted — the old find over

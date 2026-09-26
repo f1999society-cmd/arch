@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034
 #
-# bnasec Arch 1.2.0 — HyDE desktop, hardened USB persistence
+# bnasec Arch 2.0.0 — Arch + Hyprland + ML4W dotfiles, selective persistence
 # Built with mkarchiso (archiso 90+)
 
 iso_name="bnasec-arch"
-iso_label="BNASEC_120"
+iso_label="BNASEC200"
 iso_publisher="bnasec <https://github.com/f1999society-cmd/arch>"
-iso_application="bnasec Arch Live — HyDE / persistent USB"
-iso_version="1.2.1"
+iso_application="bnasec Arch Live — Hyprland + ML4W / selective persistence"
+iso_version="2.0.0"
 install_dir="arch"
 buildmodes=('iso')
 bootmodes=('bios.syslinux'

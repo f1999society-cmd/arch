@@ -1,0 +1,18 @@
+[Unit]
+Description=bnasec selective persistence — bind user data from the stick
+Documentation=man:mount(8)
+After=local-fs.target systemd-udevd.service
+Wants=local-fs.target
+Before=multi-user.target
+ConditionPathExists=/usr/local/bin/bnasec-persist-bind
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/bnasec-persist-bind
+# a broken bind must never strand the session — script exits 0 when volatile
+TimeoutStartSec=120
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -16,7 +16,7 @@ on:
         required: false
         default: ""
       publish:
-        description: "publish release v1.2.0 when tests pass (set false for test/screenshot reruns)"
+        description: "publish release v2.0.0 when tests pass (set false for test/screenshot reruns)"
         required: false
         default: "true"
 
@@ -54,7 +54,7 @@ jobs:
           # needs every MB of the ~14GB runner SSD
           pacman -S --noconfirm --needed archiso git jq github-cli
 
-      - name: build ISO (Hyde baked in)
+      - name: build ISO (ML4W baked in)
         if: ${{ inputs.reuse_iso != 'true' }}
         run: bash ci/build-iso.sh
 
@@ -102,7 +102,7 @@ jobs:
           path: ${{ env.OUT_DIR }}/*.iso
           retention-days: 3
 
-      - name: publish release v1.2.1
+      - name: publish release v2.0.0
         if: ${{ success() && github.event.inputs.skip_tests != 'true' && inputs.publish != 'false' }}
         run: |
           ISO=$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' | head -1)
@@ -111,59 +111,46 @@ jobs:
           SHA=$(awk '{print $1}' "$SHAFILE")
           SIZE=$(du -h "$ISO" | cut -f1)
           cat > release-notes.md <<EOF
-          # bnasec-arch 1.2.1 — the black-screen fix
+          # bnasec-arch 2.0.0 — rebuilt from scratch: Arch + Hyprland + ML4W
 
-          v1.2.0 booted to a dead black screen on real hardware: the login manager
-          tried to start an X11 greeter on a Wayland-only ISO (no Xorg shipped,
-          sddm-helper exit 127), and the kernel console went to serial only so
-          even boot messages never reached the monitor. Both fixed, plus:
+          Complete rebuild on user request: v1.2.x's HyDE desktop replaced by the
+          [ML4W dotfiles 2.16](https://github.com/mylinuxforwork/dotfiles) — the
+          Quickshell status bar, dock, settings app and wallpaper switcher look.
+          ISO trimmed to ~1.6GB (was 2GB).
 
-          ## Fixes in 1.2.1
-          - **Autologin into HyDE**: boots straight to the desktop as user \`bna\` — no greeter to fail on the way
-          - sddm greeter now runs under Hyprland (wayland) for logout/lock instead of the missing X11 stack
-          - **Boot is visible again**: kernel messages show on your monitor (console=tty0) — no more blind boot
-          - **tty1 fallback**: if the desktop ever fails, the physical console drops into an autologin shell instead of black
-          - **AMD GPU firmware added** (linux-firmware-amdgpu) — amdgpu never created /dev/dri on real AMD hardware in 1.2.0
+          ## What changed in 2.0.0
+          - **ML4W desktop baked in**: Quickshell status bar (top), dock (bottom), ML4W Settings app, Quickshell Overview, Welcome app, matugen theming, awww wallpapers — all preinstalled; first boot lands on the finished desktop with the default wallpaper pre-applied
+          - **No display manager at all**: getty autologins as `bna` on tty1 and .zprofile starts Hyprland via uwsm — the entire X11-greeter black-screen bug class from 1.2.0/1.2.1 is structurally gone
+          - **Selective persistence (the big one)**: the root filesystem is now ALWAYS volatile — packages reset to ISO state every boot, so package rot like the 1.1.x stick is physically impossible. What persists is exactly: `~/.mozilla` (Firefox profiles/storage), `~/.config` (ML4W/Hyprland settings + wallpaper state), `~/.local/share` (app data), `~/Documents`, `~/Downloads`, `~/Pictures` — bind-mounted from the stick's ext4 `persistence` partition (auto-created on first boot, fsck'd every boot, no root reserve)
+          - **RAM-only menu entry** (`bnasec_nopersist`) never touches the stick
+          - **AMD GPU firmware** (linux-firmware-amdgpu) + all wifi firmware kept
 
-          ## Persistence (rebuilt + battle-tested)
-          - **First boot auto-creates the persistence partition** on the stick (ext4 with journal, label \`persistence\`), zero manual partitioning
-          - **Every boot fscks the persistence fs** (preen, auto-escalating to full repair) — the ext4 allocator rot that killed 1.1.x sessions gets fixed before the overlay mounts
-          - \`tune2fs -m 0\` on every boot — no more phantom "No space left" from the 5% root reserve
-          - If persistence cannot be guaranteed, the session **boots RAM-only instead of dropping to a rescue shell**
-          - Menu: \`bnasec HyDE — persistent\` (default) / \`RAM-only session\` / \`verbose (debug)\`
-
-          ## Anti-rot / anti-lag baked in (toolbox lessons)
-          - \`/var/cache/pacman/pkg\`, \`/tmp\`, \`/var/tmp\`, \`/var/log\`, \`~/.cache\` -> tmpfs (package downloads never touch the stick)
-          - journald volatile (32M cap) + 60s write batching sysctls + zram swap (ram/2, zstd)
-          - toolbox v1.7 with menu 11 **system doctor** preinstalled at \`/usr/local/bin/bnasec-toolbox\` (alias \`bnasec\`)
-
-          ## HyDE desktop
-          - Full [HyDE](https://github.com/HyDE-project/HyDE) rice baked in: waybar, rofi, wlogout, wallbash theming, Bibata cursor, nerd fonts, sddm Corners greeter, zsh + starship + fastfetch
-          - chaotic-aur preconfigured (paru + prebuilt AUR coverage, no compiling on the stick)
+          ## Apps shipped
+          firefox, kitty, thunar, rofi, wlogout, swaync, fastfetch, btop, loupe, grimblast (screenshots), cliphist, network/bluetooth applets, pipewire audio, zsh + ohmyposh, quickshell + matugen + awww (ML4W engine)
 
           ## Verified in CI (QEMU)
-          - BIOS boot from dd'd USB image: persistence auto-created, overlay root, session answering
-          - Persistence proof: marker written inside the live session read back after a full reboot
-          - RAM-only session boots volatile
+          - BIOS boot from dd'd USB image: data partition auto-created, volatile overlay root, .config bound from stick, Hyprland session answering
+          - Selective persistence proof: markers in `~/.config` AND `~/Documents` read back after a full reboot
+          - RAM-only session boots volatile, stick untouched
           - UEFI boot verified via OVMF
 
           ## Login
-          - Autologins to HyDE as \`bna\` on boot; password \`bnasec\` (sudo: same). Fallback shell on tty1 is also autologged-in
+          - Autologins into Hyprland as `bna` on boot; password `bnasec` (sudo: same)
 
           ## Flash
-          \`\`\`bash
-          sha256sum bnasec-arch-1.2.1-x86_64.iso
+          ```bash
+          sha256sum bnasec-arch-2.0.0-x86_64.iso
           # expected: $SHA
-          sudo dd if=bnasec-arch-1.2.1-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
-          \`\`\`
-          ISO size: $SIZE. A 4 GB+ stick is enough; the rest becomes persistence.
+          sudo dd if=bnasec-arch-2.0.0-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+          ```
+          ISO size: $SIZE. A 4 GB+ stick is enough; the rest becomes your data partition.
           EOF
-          gh release delete --repo "$GITHUB_REPOSITORY" v1.2.1 --yes --cleanup-tag 2>/dev/null || true
+          gh release delete --repo "$GITHUB_REPOSITORY" v2.0.0 --yes --cleanup-tag 2>/dev/null || true
           # --repo: gh otherwise shells out to git for repo discovery, and the
           # workspace bind-mount boundary in the container breaks it
           # ('fatal: not a git repository ... up to mount point /')
-          gh release create --repo "$GITHUB_REPOSITORY" v1.2.1 "$ISO" "$SHAFILE" \
-            --title "bnasec-arch-1.2.1 — black-screen fix (autologin + visible boot)" \
+          gh release create --repo "$GITHUB_REPOSITORY" v2.0.0 "$ISO" "$SHAFILE" \
+            --title "bnasec-arch-2.0.0 — ML4W desktop + selective persistence" \
             --notes-file release-notes.md
           echo "released:"
-          gh release view --repo "$GITHUB_REPOSITORY" v1.2.1 --json assets --jq '.assets[].name'
+          gh release view --repo "$GITHUB_REPOSITORY" v2.0.0 --json assets --jq '.assets[].name'

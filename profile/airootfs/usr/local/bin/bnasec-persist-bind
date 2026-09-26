@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# bnasec selective persistence — seed + bind-mount the user data dirs from the
+# stick's ext4 "persistence" partition into the live session.
+#
+# Architecture (v2.0.0): the ROOT filesystem is ALWAYS volatile (RAM overlay) —
+# that is what kills the v1.1.x package rot forever: packages reset to the ISO
+# state every boot. What persists is exactly this list:
+#   .mozilla       Firefox profiles, logins, tabs, storage
+#   .config        ML4W/Hyprland/waybar/quickshell settings + wallpaper state
+#   .local/share   app data (quickshell configs, icons, fonts, trash, ...)
+#   Documents Downloads Pictures   user files
+#
+# Flow: the initcpio hook guarantees /dev/disk/by-label/persistence exists
+# (first boot auto-creates it) and mounts it at /var/lib/bnasec-persist. This
+# script then, for each dir: seed the persisted copy from the baked ISO content
+# on first boot, and bind-mount the persisted copy over the live path — so the
+# user's data wins on every later boot while the ISO defaults stay intact.
+set -euo pipefail
+
+PERSIST_ROOT="/var/lib/bnasec-persist/home/bna"
+HOME_DIR="/home/bna"
+UID_GID="1000:1000"
+
+# skip entirely for the RAM-only session (kernel cmdline flag)
+if grep -qw 'bnasec_nopersist' /proc/cmdline; then
+    echo "bnasec-persist: RAM-only session requested — not binding user data"
+    exit 0
+fi
+
+if ! mountpoint -q /var/lib/bnasec-persist; then
+    # hook did not mount it (first boot race, or no persistence possible) —
+    # try once by label before giving up
+    mkdir -p /var/lib/bnasec-persist
+    mount /dev/disk/by-label/persistence /var/lib/bnasec-persist 2>/dev/null || {
+        echo "bnasec-persist: no persistence partition mounted — session stays volatile"
+        exit 0
+    }
+fi
+
+DIRS=(.mozilla .config .local/share Documents Downloads Pictures)
+
+for d in "${DIRS[@]}"; do
+    src="${PERSIST_ROOT}/${d}"
+    dst="${HOME_DIR}/${d}"
+    if [ ! -e "${src}" ]; then
+        # first boot (or dir never used): seed the persisted copy from whatever
+        # the live home currently holds (baked ML4W defaults), then it diverges
+        # freely — this is the user's data from now on
+        if [ -e "${dst}" ]; then
+            mkdir -p "$(dirname "${src}")"
+            cp -a "${dst}" "${src}"
+            echo "bnasec-persist: seeded ${d} ($(du -sh "${src}" | cut -f1))"
+        else
+            mkdir -p "${src}"
+            echo "bnasec-persist: created empty ${d}"
+        fi
+        chown -R "${UID_GID}" "${src}"
+    fi
+    mkdir -p "$(dirname "${dst}")"
+    [ -e "${dst}" ] || mkdir -p "${dst}"
+    if ! mountpoint -q "${dst}"; then
+        mount --bind "${src}" "${dst}"
+        echo "bnasec-persist: bound ${d}"
+    fi
+done
+
+# ownership safety net for anything created above
+chown "${UID_GID}" "${PERSIST_ROOT}" 2>/dev/null || true
+echo "bnasec-persist: all user data dirs bound"
