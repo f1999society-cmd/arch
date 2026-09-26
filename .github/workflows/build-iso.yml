@@ -15,6 +15,10 @@ on:
         description: "run id that uploaded bnasec-iso-untested (required when reuse_iso=true)"
         required: false
         default: ""
+      publish:
+        description: "publish release v1.2.0 when tests pass (set false for test/screenshot reruns)"
+        required: false
+        default: "true"
 
 permissions:
   contents: write
@@ -77,6 +81,9 @@ jobs:
           cp -v /tmp/purge.log diag/ 2>/dev/null || true
           cp -v /tmp/keep-pkgs.txt diag/ 2>/dev/null || true
           cp -v /tmp/mkarchiso.log diag/ 2>/dev/null || true
+          # boot-test VGA screenshots (png) — visual proof of the ISO in QEMU
+          mkdir -p diag/screenshots
+          cp -v "$TEST_DIR"/shots/*.png diag/screenshots/ 2>/dev/null || true
           ls -la "$OUT_DIR" || true
 
       - name: upload diagnostics artifact
@@ -96,7 +103,7 @@ jobs:
           retention-days: 3
 
       - name: publish release v1.2.0
-        if: ${{ success() && github.event.inputs.skip_tests != 'true' }}
+        if: ${{ success() && github.event.inputs.skip_tests != 'true' && inputs.publish != 'false' }}
         run: |
           ISO=$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' | head -1)
           SHAFILE="$OUT_DIR/$(basename "$ISO").sha256"

@@ -12,6 +12,11 @@
 # Every test drives the guest over the serial console (console=ttyS0, serial
 # autologin as bna). KVM when available, otherwise TCG with longer waits.
 #
+# Each run also exposes a QEMU monitor unix socket; a background scheduler
+# fires HMP 'screendump' at scheduled offsets so the VGA surface (syslinux
+# menu, boot, sddm/HyDE session) is captured as screenshots for the user.
+# Shots are strictly best-effort: a failed screenshot never fails a test.
+#
 set -uo pipefail
 
 OUT="${OUT_DIR:-$PWD/bnasec-build-out}"
@@ -19,6 +24,37 @@ TESTS="${TEST_DIR:-$PWD/bnasec-tests}"
 ISO=$(find "$OUT" -maxdepth 1 -name '*.iso' | head -1)
 [ -n "$ISO" ] || { echo "no ISO in $OUT"; exit 1; }
 mkdir -p "$TESTS"
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+SHOTS="$TESTS/shots"           # VGA screenshots (ppm), converted to png at the end
+MON_SOCK="$TESTS/qemu-mon.sock"
+mkdir -p "$SHOTS"
+
+# ---- screenshot plumbing -------------------------------------------------
+shot() {  # arg1: name — dump the current VGA surface to $SHOTS/<name>.ppm
+    local name="$1" i
+    command -v socat >/dev/null 2>&1 || return 0
+    [ -n "${MON_SOCK:-}" ] || return 0
+    for i in 1 2 3 4 5; do [ -S "$MON_SOCK" ] && break; sleep 1; done
+    [ -S "$MON_SOCK" ] || return 0
+    printf 'screendump %s/%s.ppm\n' "$SHOTS" "$name" \
+        | timeout 5 socat - UNIX-CONNECT:"$MON_SOCK" >/dev/null 2>&1 || true
+}
+sched_shots() {  # varargs delay:name — schedule shots for the NEXT qemu run
+    SHOT_PID=""
+    (
+        for item in "$@"; do
+            sleep "${item%%:*}"
+            shot "${item#*:}"
+        done
+    ) >/dev/null 2>&1 &
+    SHOT_PID=$!
+}
+end_shots() {   # stop the scheduler once its qemu run is over
+    [ -n "${SHOT_PID:-}" ] && { kill "$SHOT_PID" 2>/dev/null; wait "$SHOT_PID" 2>/dev/null; }
+    SHOT_PID=""
+    return 0
+}
 
 # qemu is installed here, NOT in the tooling step: the build phase needs every
 # MB of the ~14GB runner disk, and the container purges the package tree before
@@ -34,7 +70,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
   PAC=pacman-static
   command -v pacman-static >/dev/null 2>&1 || PAC=pacman
   $PAC -Sy --noconfirm --needed --overwrite '/usr/lib/libstdc++*' \
-    qemu-desktop qemu-img edk2-ovmf > /tmp/qemu-install.log 2>&1 \
+    qemu-desktop qemu-img edk2-ovmf socat python > /tmp/qemu-install.log 2>&1 \
     || { tail -20 /tmp/qemu-install.log; exit 1; }
 fi
 
@@ -52,6 +88,7 @@ Q() {  # base qemu invocation (arg1: hard timeout seconds, rest: extra args)
     timeout "$tmo" qemu-system-x86_64 -machine q35 -m 3072 -smp 2 \
         -accel "$ACCEL" -display none \
         -device virtio-gpu-pci \
+        -monitor "${MON_SOCK:-none}" \
         -no-reboot "$@"
 }
 
@@ -78,11 +115,18 @@ sync
 
 # ================= T1: BIOS boot from dd'd USB image, default persistent entry =================
 echo "== T1: BIOS boot, default persistent entry =="
+MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
+# menu shot at 4s+9s (syslinux TIMEOUT is 5s), session shots land after the
+# serial shell answers and after the sddm/Hyprland probes
+sched_shots 4:t1-01-menu 9:t1-02-menu 25:t1-03-early 240:t1-04-mid 520:t1-05-late 555:t1-06-session 597:t1-07-probes
 { sleep "$BOOT_WAIT"; \
   echo "printf 'BNA_SHELL_READY_%s\\n' T1"; sleep "$CMD_WAIT"; \
   echo "findmnt -n -o FSTYPE /"; sleep 8; \
+  echo "printf 'BNA_SDDM_%s\\n' \"\$(systemctl is-active sddm 2>&1)\""; sleep 6; \
+  echo "printf 'BNA_HYP_%s\\n' \"\$(pgrep -c Hyprland 2>/dev/null)\""; sleep 6; \
   echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
-    -serial stdio -monitor none > "$TESTS/t1-serial.log" 2>&1
+    -serial stdio > "$TESTS/t1-serial.log" 2>&1
+end_shots
 grep -aq "no persistence partition found, creating one" "$TESTS/t1-serial.log" \
   && ok "T1a persistence partition auto-created on first boot" || bad "T1a auto-persist" "$TESTS/t1-serial.log"
 grep -aq "bnasec: checking persistence filesystem" "$TESTS/t1-serial.log" \
@@ -99,9 +143,13 @@ grep -aq "BNA_SHELL_READY_T1" "$TESTS/t1-serial.log" \
 # directly: no other serial content says 'overlay'.
 grep -aq "overlay" "$TESTS/t1-serial.log" \
   && ok "T1d root is overlay (persistent upperdir)" || bad "T1d overlay root" "$TESTS/t1-serial.log"
+# report-only: does the graphical stack actually come up inside the guest?
+echo "T1 graphical probe: $(grep -ao 'BNA_SDDM_[a-z]*' "$TESTS/t1-serial.log" | tail -1) $(grep -ao 'BNA_HYP_[0-9]*' "$TESTS/t1-serial.log" | tail -1)"
 
 # ================= T2: persistence proof across two boots =================
 echo "== T2: persistence proof =="
+MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
+sched_shots 25:t2b1-01-early 240:t2b1-02-mid 570:t2b1-03-session 610:t2b1-04-proof
 PERSIST_APPEND="archisobasedir=arch archisolabel=BNASEC_120 cow_label=persistence cow_directory=persist console=ttyS0,115200n8 quiet loglevel=3"
 { sleep "$BOOT_WAIT"; \
   echo "echo bnasec | sudo -S sh -c \"printf 'BNA_PERSIST_PROOF_%s\\n' 120 > /var/lib/persist-proof\""; sleep "$CMD_WAIT"; \
@@ -109,25 +157,30 @@ PERSIST_APPEND="archisobasedir=arch archisolabel=BNASEC_120 cow_label=persistenc
   echo "printf 'BNA_T2_WROTE_%s\\n' ok"; sleep "$CMD_WAIT"; \
   echo "echo bnasec | sudo -S systemctl poweroff --no-wall"; sleep "$CMD_WAIT"; } | \
   Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
-    "${DISK_ARGS[@]}" -serial stdio -monitor none > "$TESTS/t2-boot1.log" 2>&1
+    "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t2-boot1.log" 2>&1
+end_shots
 grep -aq "BNA_T2_WROTE_ok" "$TESTS/t2-boot1.log" \
   && ok "T2a marker written inside live session" || bad "T2a write" "$TESTS/t2-boot1.log"
 
+sched_shots 25:t2b2-01-early 240:t2b2-02-mid 555:t2b2-03-proof-read 585:t2b2-04-late
 { sleep "$BOOT_WAIT"; \
   echo "cat /var/lib/persist-proof"; sleep 8; \
   echo "echo BNA_T2_READ"; sleep "$CMD_WAIT"; \
   echo "echo bnasec | sudo -S systemctl poweroff --no-wall"; sleep "$CMD_WAIT"; } | \
   Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
-    "${DISK_ARGS[@]}" -serial stdio -monitor none > "$TESTS/t2-boot2.log" 2>&1
+    "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t2-boot2.log" 2>&1
+end_shots
 grep -aq "BNA_PERSIST_PROOF_120" "$TESTS/t2-boot2.log" \
   && ok "T2b marker survived reboot — PERSISTENCE PROVEN" || bad "T2b persistence proof" "$TESTS/t2-boot2.log"
 
 # ================= T3: RAM-only volatile session =================
 echo "== T3: RAM-only session =="
+sched_shots 25:t3-01-early 240:t3-02-mid 560:t3-03-session
 { sleep "$BOOT_WAIT"; echo "printf 'BNA_T3_VOLATILE_%s\\n' ok"; sleep "$CMD_WAIT"; } | \
   Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" \
     -append "archisobasedir=arch archisolabel=BNASEC_120 console=ttyS0,115200n8 quiet loglevel=3" \
-    "${DISK_ARGS[@]}" -serial stdio -monitor none > "$TESTS/t3-serial.log" 2>&1
+    "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t3-serial.log" 2>&1
+end_shots
 grep -aq "BNA_T3_VOLATILE_ok" "$TESTS/t3-serial.log" \
   && ok "T3 volatile session boots" || bad "T3 volatile" "$TESTS/t3-serial.log"
 grep -aq "bnasec: persistence unavailable" "$TESTS/t3-serial.log" \
@@ -140,16 +193,26 @@ if [ -z "$OVMF_CODE" ]; then OVMF_CODE=$(find /usr/share/ovmf /usr/share/edk2* -
 if [ -n "$OVMF_CODE" ]; then
   OVMF_VARS_SRC=$(find /usr/share/edk2 /usr/share/ovmf -name 'OVMF_VARS.4m.fd' -o -name 'OVMF_VARS.fd' 2>/dev/null | head -1)
   cp -f "$OVMF_VARS_SRC" "$TESTS/ovmf-vars.fd"
+  sched_shots 15:t4-01-ovmf 60:t4-02-menu 300:t4-03-mid 565:t4-04-session
   { sleep "$BOOT_WAIT"; echo "printf 'BNA_T4_UEFI_READY_%s\\n' ok"; sleep "$CMD_WAIT"; \
     echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
       -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
       -drive if=pflash,format=raw,file="$TESTS/ovmf-vars.fd" \
-      -serial stdio -monitor none > "$TESTS/t4-serial.log" 2>&1
+      -serial stdio > "$TESTS/t4-serial.log" 2>&1
+  end_shots
   grep -aq "BNA_T4_UEFI_READY_ok" "$TESTS/t4-serial.log" \
     && ok "T4 UEFI session reached (serial shell answering)" || bad "T4 UEFI" "$TESTS/t4-serial.log"
 else
   echo "SKIP  T4 (no OVMF firmware found)"
 fi
+
+# ---- convert screenshots ppm -> png so the diagnostics artifact is viewable
+if command -v python3 >/dev/null 2>&1 && compgen -G "$SHOTS/*.ppm" >/dev/null; then
+    python3 "$SCRIPT_DIR/ppm2png.py" "$SHOTS"/*.ppm || true
+    rm -f "$SHOTS"/*.ppm
+fi
+echo "screenshots captured: $(ls "$SHOTS" 2>/dev/null | wc -l)"
+ls -la "$SHOTS" 2>/dev/null | tail -n +2
 
 echo "== summary: $PASS passed, $FAILN failed =="
 [ "$FAILN" = 0 ]
