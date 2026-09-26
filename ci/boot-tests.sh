@@ -172,13 +172,29 @@ stop_qemu() {
 }
 
 # in-guest desktop screenshot via grim (compositor's own framebuffer —
-# independent of what QEMU's emulated GPU scans out)
+# independent of what QEMU's emulated GPU scans out). HARD-BOUNDED: every
+# step has a timeout so a wedged renderer can never hang the phase again
+# (run 36273739860: an unbounded grim burned 30 minutes of the T2 window).
+# Fallback: create a headless output and capture THAT — it renders through
+# the same compositor pipeline even when the real scanout is broken in VMs.
 guest_grim() { # arg1: local file name for the png
     ssh_g 'export XDG_RUNTIME_DIR=/run/user/1000;
            WD=$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -oE "^wayland-[0-9]+$" | head -1);
-           if [ -n "$WD" ]; then WAYLAND_DISPLAY="$WD" grim -t png /tmp/bnasec-desktop.png && echo GRIM_OK; else echo GRIM_NOWAYLAND; fi' \
-        > /tmp/grim-status.txt 2>&1
-    grep -q GRIM_OK /tmp/grim-status.txt || { echo "grim failed: $(cat /tmp/grim-status.txt)"; return 1; }
+           echo "WAYLAND_DISPLAY=$WD";
+           if [ -z "$WD" ]; then echo GRIM_NOWAYLAND; exit 0; fi
+           export WAYLAND_DISPLAY="$WD";
+           echo "== monitors (before) =="; timeout 6 hyprctl monitors all 2>&1 | head -20;
+           timeout 6 hyprctl output create headless 2>&1 || true;
+           sleep 2;
+           HOUT=$(timeout 6 hyprctl monitors all 2>/dev/null | grep -i headless | head -1 | sed -nE "s/.*[(]([^)]+)[)].*/\1/p");
+           echo "headless output: ${HOUT:-none}";
+           echo "== monitors (after) =="; timeout 6 hyprctl monitors all 2>&1 | grep -iE "monitor|headless" | head -10;
+           if timeout 25 grim /tmp/bnasec-desktop.png 2>/tmp/grim-err.txt; then echo GRIM_OK;
+           elif [ -n "$HOUT" ] && timeout 25 grim -o "$HOUT" /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; then echo GRIM_OK_HEADLESS;
+           else echo "GRIM_FAIL: $(cat /tmp/grim-err.txt 2>/dev/null | head -2)"; fi' \
+        > /tmp/grim-diag.txt 2>&1
+    cat /tmp/grim-diag.txt   # full diagnostics land in the CI step log
+    grep -q "GRIM_OK" /tmp/grim-diag.txt || return 1
     scp_g bna@127.0.0.1:/tmp/bnasec-desktop.png "$SHOTS/$1" >/dev/null 2>&1
     [ -s "$SHOTS/$1" ]
 }
@@ -259,16 +275,21 @@ if wait_ssh 420; then
     ok "T2a ssh control channel reachable (key injected via cmdline)"
     # the session needs its own bootstrap time; poll for the verdict file
     wait_verdict 240 || echo "WARN: session verdict still absent after 240s"
-    VERDICT=$(ssh_g 'cat ~/.cache/bnasec-session-verdict 2>/dev/null; echo ---; cat ~/.config/bnasec/verdict 2>/dev/null' | head -3)
-    echo "session verdict: $VERDICT" | tee "$TESTS/t2-verdict.txt"
+    # CURRENT boot's verdict only — the persisted ~/.config copy could be a
+    # previous boot's leftover
+    VERDICT=$(ssh_g 'cat ~/.cache/bnasec-session-verdict 2>/dev/null; echo "(persisted: $(cat ~/.config/bnasec/verdict 2>/dev/null | head -1))"')
+    echo "session verdict (this boot): $VERDICT" | tee "$TESTS/t2-verdict.txt"
     # exact match: BAR=quickshell must NOT substring-match BAR=quickshell-software
-    echo "$VERDICT" | grep -qE "BAR=quickshell( |$)" \
+    echo "$VERDICT" | grep -E "BAR=quickshell( |$)" >/dev/null \
       && ok "T2b session verdict: BAR=quickshell (the real ML4W bar is UP)" \
       || { echo "$VERDICT" | grep -qE "BAR=(quickshell-software|waybar)" \
            && ok "T2b session verdict: fallback bar up ($(echo "$VERDICT" | grep -oE 'BAR=[a-z-]*' | head -1)) — quickshell failed, INVESTIGATE" \
            || bad "T2b session verdict" "$TESTS/t2-verdict.txt"; }
     HYPN=$(ssh_g 'pgrep -c Hyprland' | tail -1)
     [ "${HYPN:-0}" -ge 1 ] 2>/dev/null && ok "T2c Hyprland compositor alive" || bad "T2c Hyprland" "$TESTS/t2-serial.log"
+    # deep guest render diagnostics: why the VGA scanout may be black in the VM
+    DIAG=$(ssh_g 'echo "== /dev/dri =="; ls -l /dev/dri 2>&1 | head -6; echo "== Hyprland env =="; tr "\000" "\012" < /proc/$(pgrep -o Hyprland)/environ 2>/dev/null | grep -E "AQ_|LIBGL|WLR" | sort; echo "== hyprland.log tail =="; tail -20 /tmp/hypr/*/hyprland.log 2>/dev/null | grep -aiE "backend|egl|gl|drm|output|swrast|llvmpipe|error" | head -15; echo "== mem =="; free -h | head -2' )
+    echo "$DIAG" | tee "$TESTS/t2-guest-diag.txt"
     QSN=$(ssh_g 'pgrep -cx qs' | tail -1)
     echo "quickshell procs: $QSN"
     if guest_grim t2-04-desktop-grim.png; then

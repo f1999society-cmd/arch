@@ -388,11 +388,21 @@ copy_unowned() {
   rm -f "$owned"
 }
 
-# pacman config for the live system + chaotic mirrorlist
+# pacman config for the live system + mirrors
 # (strip the build-only [bnasec-local] file:// repo — it does not exist at runtime)
 mkdir -p "$A/etc/pacman.d"
 sed '/^\[bnasec-local\]/,+3d' "$PROFILE_DIR/pacman.conf" > "$A/etc/pacman.conf"
 cp /etc/pacman.d/chaotic-mirrorlist "$A/etc/pacman.d/chaotic-mirrorlist"
+# v3.0.0 ROOT-CAUSE FIX #4: the live system's /etc/pacman.d/mirrorlist came
+# from the pacman-mirrorlist package, which ships EVERY server commented out.
+# First 'pacman -Sy' in the guest died with "no servers configured for
+# repository" (run 36273739860) — the user could never install anything.
+# Bake the container's ACTIVE mirrorlist; pacman-mirrorlist is a backup-file
+# package so the pacstrap later lands it as mirrorlist.pacnew (no conflict).
+cp /etc/pacman.d/mirrorlist "$A/etc/pacman.d/mirrorlist"
+grep -q '^Server' "$A/etc/pacman.d/mirrorlist" \
+  || { echo "!! container mirrorlist has no active Server lines"; exit 1; }
+echo "mirrorlist baked: $(grep -c '^Server' "$A/etc/pacman.d/mirrorlist") active servers"
 
 # locale data (locale-gen ran in the container). Skip glibc-owned dirs (C.utf8 is
 # shipped by the glibc package — pacstrap would hit the same "exists in filesystem").

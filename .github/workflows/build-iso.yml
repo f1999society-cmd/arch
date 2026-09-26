@@ -76,6 +76,7 @@ jobs:
         run: |
           mkdir -p diag
           cp -v "$TEST_DIR"/*.log diag/ 2>/dev/null || true
+          cp -v "$TEST_DIR"/*.txt diag/ 2>/dev/null || true
           cp -v /tmp/hyde-install.log diag/ 2>/dev/null || true
           cp -v /tmp/pkg-install.log diag/ 2>/dev/null || true
           cp -v /tmp/purge.log diag/ 2>/dev/null || true
