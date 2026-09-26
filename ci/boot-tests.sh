@@ -40,12 +40,15 @@ shot() {  # arg1: name — dump the current VGA surface to $SHOTS/<name>.ppm
     printf 'screendump %s/%s.ppm\n' "$SHOTS" "$name" \
         | timeout 5 socat - UNIX-CONNECT:"$MON_SOCK" >/dev/null 2>&1 || true
 }
-sched_shots() {  # varargs delay:name — schedule shots for the NEXT qemu run
+sched_shots() {  # varargs ABSOLUTE_OFFSET:name — schedule shots for the NEXT qemu run
     SHOT_PID=""
     (
+        prev=0
         for item in "$@"; do
-            sleep "${item%%:*}"
-            shot "${item#*:}"
+            at="${item%%:*}"; name="${item#*:}"
+            sleep $((at - prev))   # offsets are absolute; sleep the DELTA
+            prev=$at
+            shot "$name"
         done
     ) >/dev/null 2>&1 &
     SHOT_PID=$!
@@ -70,14 +73,28 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
   PAC=pacman-static
   command -v pacman-static >/dev/null 2>&1 || PAC=pacman
   $PAC -Sy --noconfirm --needed --overwrite '/usr/lib/libstdc++*' \
-    qemu-desktop qemu-img edk2-ovmf socat python > /tmp/qemu-install.log 2>&1 \
+    qemu-desktop qemu-img edk2-ovmf socat python mesa virglrenderer > /tmp/qemu-install.log 2>&1 \
     || { tail -20 /tmp/qemu-install.log; exit 1; }
 fi
 
 # ---- acceleration
 if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL="kvm"; else ACCEL="tcg"; fi
 echo "accel: $ACCEL"
-if [ "$ACCEL" = "kvm" ]; then BOOT_WAIT=180; CMD_WAIT=25; HARD_WAIT=270; else BOOT_WAIT=540; CMD_WAIT=45; HARD_WAIT=660; fi
+if [ "$ACCEL" = "kvm" ]; then BOOT_WAIT=180; CMD_WAIT=25; HARD_WAIT=360; AUTOWAIT=60; else BOOT_WAIT=540; CMD_WAIT=45; HARD_WAIT=780; AUTOWAIT=90; fi
+
+# ---- can this qemu do virgl GL? without it the greeter/HyDE can't paint
+# (run 36217224195: virtio-gpu-pci -> sddm active but 12 identical black
+# frames). Probe with a 4s throwaway VM: rc 124 = qemu RAN (device ok);
+# any other rc = instant death (device/gl unsupported) -> fallback.
+GPU_DEVICE=virtio-gpu-pci
+timeout 4 qemu-system-x86_64 -machine q35 -m 128 -accel "$ACCEL" \
+    -display none,gl=on -device virtio-vga-gl -monitor none > /tmp/gpu-probe.log 2>&1
+if [ $? -eq 124 ]; then
+    GPU_DEVICE=virtio-vga-gl
+else
+    echo "virtio-vga-gl probe failed ($(tail -1 /tmp/gpu-probe.log 2>/dev/null)), using virtio-gpu-pci"
+fi
+echo "gpu: $GPU_DEVICE"
 
 PASS=0; FAILN=0
 ok()  { echo "PASS  $1"; PASS=$((PASS+1)); }
@@ -87,11 +104,12 @@ Q() {  # base qemu invocation (arg1: hard timeout seconds, rest: extra args)
     local tmo="$1"; shift
     # -monitor takes a chardev spec, NOT a bare path (run 36215135468:
     # '-monitor <path>' died with "not a valid char driver" on every test)
-    local mon="none"
+    local mon="none" disp="-display none"
     [ -n "${MON_SOCK:-}" ] && mon="unix:$MON_SOCK,server,nowait"
+    [ "$GPU_DEVICE" = virtio-vga-gl ] && disp="-display none,gl=on"
     timeout "$tmo" qemu-system-x86_64 -machine q35 -m 3072 -smp 2 \
-        -accel "$ACCEL" -display none \
-        -device virtio-gpu-pci \
+        -accel "$ACCEL" $disp \
+        -device "$GPU_DEVICE" \
         -monitor "$mon" \
         -no-reboot "$@"
 }
@@ -125,12 +143,20 @@ MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
 # are silent no-ops, so a couple of speculative late shots are free
 sched_shots 4:t1-01-menu 9:t1-02-menu 25:t1-03-early $((BOOT_WAIT/2)):t1-04-mid \
   $((BOOT_WAIT-30)):t1-05-late $((BOOT_WAIT+5)):t1-06-ready \
-  $((BOOT_WAIT+CMD_WAIT+10)):t1-07-probes $((BOOT_WAIT+CMD_WAIT+16)):t1-08-desktop
+  $((BOOT_WAIT+CMD_WAIT+10)):t1-07-probes $((BOOT_WAIT+CMD_WAIT+16)):t1-08-desktop \
+  $((BOOT_WAIT+CMD_WAIT+34)):t1-09-greeter \
+  $((BOOT_WAIT+CMD_WAIT+16+AUTOWAIT+15)):t1-10-hyde \
+  $((BOOT_WAIT+CMD_WAIT+16+AUTOWAIT+23)):t1-11-hyde2 \
+  $((BOOT_WAIT+CMD_WAIT+16+AUTOWAIT+34)):t1-12-hyde3
 { sleep "$BOOT_WAIT"; \
   echo "printf 'BNA_SHELL_READY_%s\\n' T1"; sleep "$CMD_WAIT"; \
   echo "findmnt -n -o FSTYPE /"; sleep 8; \
   echo "printf 'BNA_SDDM_%s\\n' \"\$(systemctl is-active sddm 2>&1)\""; sleep 6; \
   echo "printf 'BNA_HYP_%s\\n' \"\$(pgrep -c Hyprland 2>/dev/null)\""; sleep 6; \
+  echo "pgrep -a sddm-greeter | head -1; ls -la /dev/dri/ 2>/dev/null | head -4; ls /usr/share/wayland-sessions/ 2>/dev/null"; sleep 6; \
+  echo "echo bnasec | sudo -S sh -c 'mkdir -p /etc/sddm.conf.d; printf \"[Autologin]\\nUser=bna\\nSession=hyprland.desktop\\n\" > /etc/sddm.conf.d/zz-ci-autologin.conf; cat /etc/sddm.conf.d/zz-ci-autologin.conf'"; sleep 6; \
+  echo "echo bnasec | sudo -S systemctl restart sddm"; sleep "$AUTOWAIT"; \
+  echo "printf 'BNA_HYP2_%s\\n' \"\$(pgrep -c Hyprland 2>/dev/null)\""; sleep 8; \
   echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
     -serial stdio > "$TESTS/t1-serial.log" 2>&1
 end_shots
@@ -151,7 +177,7 @@ grep -aq "BNA_SHELL_READY_T1" "$TESTS/t1-serial.log" \
 grep -aq "overlay" "$TESTS/t1-serial.log" \
   && ok "T1d root is overlay (persistent upperdir)" || bad "T1d overlay root" "$TESTS/t1-serial.log"
 # report-only: does the graphical stack actually come up inside the guest?
-echo "T1 graphical probe: $(grep -ao 'BNA_SDDM_[a-z]*' "$TESTS/t1-serial.log" | tail -1) $(grep -ao 'BNA_HYP_[0-9]*' "$TESTS/t1-serial.log" | tail -1)"
+echo "T1 graphical probe: $(grep -ao 'BNA_SDDM_[a-z]*' "$TESTS/t1-serial.log" | tail -1) $(grep -ao 'BNA_HYP_[0-9]*' "$TESTS/t1-serial.log" | tail -1) hyde-after-autologin: $(grep -ao 'BNA_HYP2_[0-9]*' "$TESTS/t1-serial.log" | tail -1)"
 
 # ================= T2: persistence proof across two boots =================
 echo "== T2: persistence proof =="
