@@ -144,7 +144,10 @@ fi
 # never pacstrapped into the airootfs and this repo is not added to the profile
 # pacman.conf. On the live stick, first-boot deez will offer to install the
 # real packages onto the persistence partition.
-DEEZ_OMIT=(qt5ct kvantum-qt5 qt5-wayland qt5-imageformats qt5-quickcontrols qt5-quickcontrols2 qt5-graphicaleffects)
+# electron: ~330MiB installed / ~120MiB compressed for ONE deez extra-dots dep.
+# Same deal as the qt5 set: stub in the container, real package via deez on the
+# stick. This alone brought v1.2.1 (with linux-firmware-amdgpu) back under 2GiB.
+DEEZ_OMIT=(qt5ct kvantum-qt5 qt5-wayland qt5-imageformats qt5-quickcontrols qt5-quickcontrols2 qt5-graphicaleffects electron)
 LOCALREPO=/tmp/bnasec-localrepo
 mkdir -p "$LOCALREPO"
 STUBBUILT=()
@@ -328,6 +331,27 @@ cp -a /home/bna/. "$A/home/bna/"
 # one cosmetic mode — static wallpapers stay; ISO must fit GitHub's 2GiB
 # release-asset cap (we were 10MiB over, run 41a7949 series)
 find "$A/home/bna/.config/hyde/themes" -type f \( -iname '*.mp4' -o -iname '*.webm' -o -iname '*.mkv' \) -print -delete 2>/dev/null | head -10
+# theme wallpaper galleries: PNG/JPEG files are already compressed, so squashfs
+# gains nothing — every byte here is a byte in the ISO. Keep the DEFAULT theme's
+# gallery fully intact (that is what the user sees on first boot); for every
+# other kept theme, keep any wallpaper referenced by the theme's own config
+# files plus the first 6 (sorted, deterministic), drop the rest. Gallery is
+# scanned dynamically by Super+W, so nothing breaks — the picker just lists
+# fewer entries for the non-default themes.
+DEFAULT_THEME="Catppuccin Mocha"
+for t in "$A/home/bna/.config/hyde/themes"/*; do
+  base=$(basename "$t"); [ -d "$t/wallpapers" ] || continue
+  [ "$base" = "$DEFAULT_THEME" ] && continue
+  n=$(find "$t/wallpapers" -type f | wc -l)
+  [ "$n" -le 6 ] && continue
+  before=$(du -sm "$t/wallpapers" | cut -f1)
+  ref=$(grep -rhoE '[A-Za-z0-9 _().+-]+\.(png|jpe?g|webp|gif|webm|mp4|mkv)' "$t" --include='*.conf' --include='*.toml' --include='*.sh' --include='*.json' 2>/dev/null | sort -u || true)
+  kept=0
+  while IFS= read -r f; do
+    if grep -qxF "$f" <<<"$ref" || [ "$kept" -lt 6 ]; then kept=$((kept+1)); else rm -f -- "$t/wallpapers/$f"; fi
+  done < <(find "$t/wallpapers" -type f -printf '%f\n' | sort)
+  echo "gallery trim '$base': $n -> $kept files (${before}MiB -> $(du -sm "$t/wallpapers" | cut -f1)MiB)"
+done
 
 # display manager theme written by install_pst.sh + Hyde theme archives.
 # copy_unowned: copy SRC under DST but SKIP any path owned by the named packages —

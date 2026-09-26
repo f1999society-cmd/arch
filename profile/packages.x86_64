@@ -75,9 +75,9 @@ xdg-desktop-portal-hyprland
 xdg-desktop-portal-gtk
 xdg-user-dirs
 xorg-xwayland
-# Hyde extra-dots deps: deez installs these interactively at first run if absent,
-# which cannot work inside the build container (EOF on the pacman prompt) — preinstall
-electron
+# 'electron' moved to DEEZ_OMIT (ci/build-iso.sh): ~330MiB installed for one
+# deez extra-dots dep. The container gets an empty stub so deez's 'pacman -Q'
+# check passes; on the stick first-run deez offers the real package (network).
 swaync
 brightnessctl
 playerctl
