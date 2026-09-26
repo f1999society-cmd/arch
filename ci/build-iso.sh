@@ -151,6 +151,11 @@ pacman -S --noconfirm --needed $(grep -vE '^\s*#|^\s*$' "$PROFILE_DIR/packages.x
 # are unowned by glibc and get baked into the airootfs during collect.
 sed -i 's/^#en_US\.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
 locale-gen
+# Hyde's installer later runs a bare interactive 'pacman -Syu' ("[PACMAN] update
+# :: packages...") — bring the container fully current NOW so it finds nothing
+# to prompt about; a mirror-side kernel bump between runs EOF'd Hyde's prompt
+# and killed the install (linux 7.2.6->7.2.7 mid-run)
+pacman -Syu --noconfirm >> /tmp/pkg-install.log 2>&1 || { tail -8 /tmp/pkg-install.log; echo "!! container upgrade failed"; exit 1; }
 echo "container now has: $(pacman -Qq | wc -l) packages"
 # GitHub release assets are capped at 2 GiB — the v1.2.0 ISO (2.4 GiB) cannot be
 # published as-is (HTTP 422 'size must be less than 2147483648'). Print the
