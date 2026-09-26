@@ -185,7 +185,11 @@ grep -aq "BNA_PERSIST_MNT_ext4" "$TESTS/t1-serial.log" \
   && ok "T1e persistence data partition mounted (ext4)" || bad "T1e persist mount" "$TESTS/t1-serial.log"
 grep -aq "BNA_PERSIST_SVC_active" "$TESTS/t1-serial.log" \
   && ok "T1f selective persist service active" || bad "T1f persist service" "$TESTS/t1-serial.log"
-grep -aq "/var/lib/bnasec-persist/home/bna/.config" "$TESTS/t1-serial.log" \
+# findmnt canonicalizes a bind source through its DEVICE: /dev/sdX[/home/bna/.config].
+# Grepping for the /var/lib/bnasec-persist path never matched (run 36249869276
+# false-failed T1g while T2b proved the bind works across reboot). Match the
+# kernel subpath marker instead; the typed command echo cannot contain it.
+grep -aq "\[/home/bna/.config\]" "$TESTS/t1-serial.log" \
   && ok "T1g .config bound from stick" || bad "T1g bind .config" "$TESTS/t1-serial.log"
 grep -aq "BNA_QS_" "$TESTS/t1-serial.log" && ok "T1h quickshell probe answered" || ok "T1h quickshell probe inconclusive"
 # report-only: does the graphical stack actually come up inside the guest?
