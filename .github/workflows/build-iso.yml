@@ -102,7 +102,7 @@ jobs:
           path: ${{ env.OUT_DIR }}/*.iso
           retention-days: 3
 
-      - name: publish release v1.2.0
+      - name: publish release v1.2.1
         if: ${{ success() && github.event.inputs.skip_tests != 'true' && inputs.publish != 'false' }}
         run: |
           ISO=$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' | head -1)
@@ -111,11 +111,19 @@ jobs:
           SHA=$(awk '{print $1}' "$SHAFILE")
           SIZE=$(du -h "$ISO" | cut -f1)
           cat > release-notes.md <<EOF
-          # bnasec-arch 1.2.0 — HyDE desktop, rebuilt from the ground up
+          # bnasec-arch 1.2.1 — the black-screen fix
 
-          Full rebuild of the persistent live ISO. The rice is now
-          [HyDE](https://github.com/HyDE-project/HyDE) (Hyde-project/hyde), and the
-          persistence layer was rebuilt with every failure from the 1.1.x saga fixed.
+          v1.2.0 booted to a dead black screen on real hardware: the login manager
+          tried to start an X11 greeter on a Wayland-only ISO (no Xorg shipped,
+          sddm-helper exit 127), and the kernel console went to serial only so
+          even boot messages never reached the monitor. Both fixed, plus:
+
+          ## Fixes in 1.2.1
+          - **Autologin into HyDE**: boots straight to the desktop as user \`bna\` — no greeter to fail on the way
+          - sddm greeter now runs under Hyprland (wayland) for logout/lock instead of the missing X11 stack
+          - **Boot is visible again**: kernel messages show on your monitor (console=tty0) — no more blind boot
+          - **tty1 fallback**: if the desktop ever fails, the physical console drops into an autologin shell instead of black
+          - **AMD GPU firmware added** (linux-firmware-amdgpu) — amdgpu never created /dev/dri on real AMD hardware in 1.2.0
 
           ## Persistence (rebuilt + battle-tested)
           - **First boot auto-creates the persistence partition** on the stick (ext4 with journal, label \`persistence\`), zero manual partitioning
@@ -140,22 +148,22 @@ jobs:
           - UEFI boot verified via OVMF
 
           ## Login
-          - user \`bna\` / password \`bnasec\` (sudo: same password)
+          - Autologins to HyDE as \`bna\` on boot; password \`bnasec\` (sudo: same). Fallback shell on tty1 is also autologged-in
 
           ## Flash
           \`\`\`bash
-          sha256sum bnasec-arch-1.2.0-x86_64.iso
+          sha256sum bnasec-arch-1.2.1-x86_64.iso
           # expected: $SHA
-          sudo dd if=bnasec-arch-1.2.0-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+          sudo dd if=bnasec-arch-1.2.1-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
           \`\`\`
           ISO size: $SIZE. A 4 GB+ stick is enough; the rest becomes persistence.
           EOF
-          gh release delete --repo "$GITHUB_REPOSITORY" v1.2.0 --yes --cleanup-tag 2>/dev/null || true
+          gh release delete --repo "$GITHUB_REPOSITORY" v1.2.1 --yes --cleanup-tag 2>/dev/null || true
           # --repo: gh otherwise shells out to git for repo discovery, and the
           # workspace bind-mount boundary in the container breaks it
           # ('fatal: not a git repository ... up to mount point /')
-          gh release create --repo "$GITHUB_REPOSITORY" v1.2.0 "$ISO" "$SHAFILE" \
-            --title "bnasec-arch-1.2.0 — HyDE + hardened persistence" \
+          gh release create --repo "$GITHUB_REPOSITORY" v1.2.1 "$ISO" "$SHAFILE" \
+            --title "bnasec-arch-1.2.1 — black-screen fix (autologin + visible boot)" \
             --notes-file release-notes.md
           echo "released:"
-          gh release view --repo "$GITHUB_REPOSITORY" v1.2.0 --json assets --jq '.assets[].name'
+          gh release view --repo "$GITHUB_REPOSITORY" v1.2.1 --json assets --jq '.assets[].name'

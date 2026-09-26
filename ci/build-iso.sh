@@ -351,6 +351,25 @@ copy_unowned() {
   rm -f "$owned"
 }
 copy_unowned /etc/sddm.conf.d       "$A/etc/sddm.conf.d"       sddm
+# sddm defaults to an X11 greeter, but this ISO ships NO Xorg — sddm-helper
+# exits 127 (command not found) and the user stares at a black screen forever
+# (run 36220736329 + real-hardware report from the v1.2.0 USB). Run the
+# greeter under Hyprland (wayland display server) instead, and autologin
+# straight into HyDE on boot — the CI autologin trick (HYP2_1) proved this
+# session path works. zz- prefix keeps it last/authoritative vs Hyde confs.
+cat > "$A/etc/sddm.conf.d/zz-bnasec.conf" <<'EOF'
+[General]
+DisplayServer=wayland
+
+[Wayland]
+CompositorCommand=Hyprland
+
+[Autologin]
+User=bna
+Session=hyprland.desktop
+Relogin=false
+EOF
+echo "sddm: wayland greeter + baked autologin written"
 copy_unowned /usr/share/sddm/themes "$A/usr/share/sddm/themes" sddm
 if [ -d /usr/share/sddm/faces ]; then
   copy_unowned /usr/share/sddm/faces "$A/usr/share/sddm/faces" sddm
