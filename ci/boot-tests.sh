@@ -85,7 +85,10 @@ fi
 # ---- acceleration
 if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL="kvm"; else ACCEL="tcg"; fi
 echo "accel: $ACCEL"
-if [ "$ACCEL" = "kvm" ]; then BOOT_WAIT=180; CMD_WAIT=25; HARD_WAIT=420; else BOOT_WAIT=540; CMD_WAIT=45; HARD_WAIT=900; fi
+if [ "$ACCEL" = "kvm" ]; then BOOT_WAIT=180; CMD_WAIT=25; HARD_WAIT=420; IT_WAIT=1800; else BOOT_WAIT=540; CMD_WAIT=45; HARD_WAIT=900; IT_WAIT=2700; fi
+# IT_WAIT: interactive ssh phases (T2/T3) stay up as long as the script needs
+# (run 36270352167: the serial-era 420s timeout killed qemu mid-T2 — every
+# later check died with 'connection refused')
 
 # ---- can this qemu do virgl GL? (egl-headless probe, 4s throwaway VM)
 GPU_DEVICE=virtio-gpu-pci
@@ -249,7 +252,7 @@ grep -aq "bnasec-fixmodes: PASS" "$TESTS/t1-serial.log" \
 echo "== T2: SSH-driven environment + session checks (same stick, boot 2) =="
 MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
 sched_shots 25:t2-01-early $((BOOT_WAIT/2)):t2-02-mid $((BOOT_WAIT+60)):t2-03-late
-Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
+Q "$IT_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
     "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t2-serial.log" 2>&1 < /dev/null &
 QPID=$!
 if wait_ssh 420; then
@@ -284,9 +287,16 @@ if wait_ssh 420; then
     [ "$EZA_LS" -ge 1 ] && ok "T2g interactive zsh ls works (eza chain intact)" || bad "T2g zsh ls" "$TESTS/t2-serial.log"
     ssh_g 'command -v kitty && command -v firefox' | grep -q "/kitty" \
       && ok "T2h kitty + firefox installed" || bad "T2h kitty/firefox" "$TESTS/t2-serial.log"
-    NET=$(ssh_g 'curl -sI --max-time 15 https://archlinux.org | head -1')
+    # network: retry a couple of times — NM may still be settling its DHCP lease
+    NET=""; for t in 1 2 3; do
+        NET=$(ssh_g 'curl -sI --max-time 15 https://archlinux.org | head -1')
+        echo "$NET" | grep -q "HTTP" && break
+        sleep 10
+    done
+    IP4=$(ssh_g 'ip -4 -o addr show | grep -v 127.0.0.1 | head -1')
+    echo "guest net: $NET | $IP4"
     echo "$NET" | grep -q "HTTP" \
-      && ok "T2i network up ($NET)" || bad "T2i network" "$TESTS/t2-serial.log"
+      && ok "T2i network up ($NET)" || bad "T2i network ($NET / $IP4)" "$TESTS/t2-serial.log"
     AUD=$(ssh_g 'systemctl --user is-active pipewire.socket wireplumber 2>&1' | tr '\n' ' ')
     echo "$AUD" | grep -q "active active" \
       && ok "T2j audio stack up (pipewire.socket + wireplumber)" || bad "T2j audio ($AUD)" "$TESTS/t2-serial.log"
@@ -305,7 +315,7 @@ end_shots
 # ===========================================================================
 echo "== T3a: heavy write boot — space check, LibreOffice install, 1GB file =="
 MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
-Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
+Q "$IT_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
     "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t3a-serial.log" 2>&1 < /dev/null &
 QPID=$!
 if wait_ssh 420; then
@@ -316,22 +326,26 @@ if wait_ssh 420; then
       && ok "T3a-2 space check before: ${SPACE_BEFORE}KB free on persistence partition" \
       || bad "T3a-2 space before" "$TESTS/t2-serial.log"
     ssh_g 'printf "BNA_MARK_CFG_%s\n" 300 > ~/.config/bnasec-proof && printf "BNA_MARK_DOC_%s\n" 300 > ~/Documents/bnasec-proof && echo MARKS_OK' | grep -q MARKS_OK \
-      && ok "T3a-3 markers written (.config + Documents)" || bad "T3a-3 markers" "$TESTS/t2-serial.log"
-    echo "-- installing libreoffice-fresh (~1.2GB into the root overlay ON the stick) --"
-    if ssh_g 'sudo pacman -Sy --noconfirm --needed libreoffice-fresh >/tmp/t3-install.log 2>&1 || sudo pacman -Syu --noconfirm --needed libreoffice-fresh >>/tmp/t3-install.log 2>&1; sudo pacman -Q libreoffice-fresh' \
-        | grep -q "libreoffice-fresh"; then
-        ok "T3a-4 libreoffice-fresh installed into the persistent root"
-    else
-        bad "T3a-4 libreoffice install" "$TESTS/t2-serial.log"
-        ssh_g 'tail -20 /tmp/t3-install.log' | tail -20
-    fi
+      && ok "T3a-3 markers written (.config + Documents)" || bad "T3a-3 markers" "$TESTS/t3a-serial.log"
+    echo "-- installing libreoffice-fresh via full sync (pacman -Syu: the correct transaction on media older than the mirrors — partial -Sy is a known instant-fail) --"
+    ssh_g 'sudo pacman -Syu --noconfirm --needed libreoffice-fresh >/tmp/t3-install.log 2>&1; echo INSTALL_RC=$?; tail -5 /tmp/t3-install.log' \
+        | tee "$TESTS/t3-install-tail.txt" | grep -q "INSTALL_RC=0" \
+      && ok "T3a-4 libreoffice-fresh installed into the persistent root" \
+      || bad "T3a-4 libreoffice install (see t3-install-tail.txt)" "$TESTS/t3-install-tail.txt"
+    scp_g bna@127.0.0.1:/tmp/t3-install.log "$TESTS/t3-install.log" >/dev/null 2>&1 || true
+    tail -6 "$TESTS/t3-install.log" 2>/dev/null || true
+    PKGQ=$(ssh_g 'pacman -Q libreoffice-fresh 2>&1' | tail -1)
+    echo "$PKGQ" | grep -qE '^libreoffice-fresh [0-9]' \
+      && ok "T3a-4b pacman -Q confirms install ($PKGQ)" \
+      || bad "T3a-4b pacman -Q ($PKGQ)" "$TESTS/t3a-serial.log"
     SOF=$(ssh_g 'soffice --version 2>/dev/null | head -1')
+    echo "soffice: $SOF"
     echo "$SOF" | grep -qi "libreoffice" \
-      && ok "T3a-5 soffice runs: $SOF" || bad "T3a-5 soffice --version" "$TESTS/t2-serial.log"
+      && ok "T3a-5 soffice runs: $SOF" || bad "T3a-5 soffice --version ($SOF)" "$TESTS/t3a-serial.log"
     echo "-- writing 1 GB file into ~/Documents (persistence partition) --"
-    SUM1=$(ssh_g 'dd if=/dev/urandom of=~/Documents/bnasec-1gb.bin bs=1M count=1024 status=none && sha256sum ~/Documents/bnasec-1gb.bin | awk "{print \$1}"' | tail -1)
-    echo "$SUM1" | grep -qE "^[0-9a-f]{64}$" \
-      && ok "T3a-6 1GB file written, sha256=$SUM1" || bad "T3a-6 1GB write" "$TESTS/t2-serial.log"
+    SUM1=$(ssh_g 'dd if=/dev/urandom of="$HOME/Documents/bnasec-1gb.bin" bs=1M count=1024 status=none; echo DD_RC=$?; sha256sum "$HOME/Documents/bnasec-1gb.bin" 2>&1' | tee "$TESTS/t3-dd.txt" | tail -1 | awk '{print $1}')
+    grep -q "DD_RC=0" "$TESTS/t3-dd.txt" && echo "$SUM1" | grep -qE '^[0-9a-f]{64}$' \
+      && ok "T3a-6 1GB file written, sha256=$SUM1" || bad "T3a-6 1GB write" "$TESTS/t3-dd.txt"
     SPACE_AFTER=$(ssh_g 'df -k /var/lib/bnasec-persist | tail -1 | awk "{print \$4}"' | tail -1)
     echo "T3 space after: ${SPACE_AFTER}KB" | tee -a "$TESTS/t3-space.log"
     if [ -n "$SPACE_BEFORE" ] && [ -n "$SPACE_AFTER" ]; then
@@ -342,7 +356,13 @@ if wait_ssh 420; then
         bad "T3a-7 space readings" "$TESTS/t3-space.log"
     fi
     # manifest INTO the persisted .config so boot 4 can compare against it
-    ssh_g "printf 'sha256=%s\npkg=%s\nspace_before_kb=%s\nspace_after_kb=%s\n' '$SUM1' '$(ssh_g 'pacman -Q libreoffice-fresh' | tail -1)' '$SPACE_BEFORE' '$SPACE_AFTER' > ~/.config/bnasec-t3-manifest" && ok "T3a-8 manifest written to persisted .config"
+    if echo "$SUM1" | grep -qE '^[0-9a-f]{64}$'; then
+        PKGSTR=$(ssh_g 'pacman -Q libreoffice-fresh 2>/dev/null' | tail -1)
+        ssh_g "printf 'sha256=%s\npkg=%s\nspace_before_kb=%s\nspace_after_kb=%s\n' '$SUM1' '$PKGSTR' '$SPACE_BEFORE' '$SPACE_AFTER' > ~/.config/bnasec-t3-manifest" \
+          && ok "T3a-8 manifest written to persisted .config"
+    else
+        echo "WARN: manifest skipped — 1GB write did not succeed"
+    fi
     guest_grim t3a-09-desktop-grim.png && echo "T3a grim shot ok" || echo "T3a grim shot failed (non-fatal)"
     ssh_g 'sudo systemctl reboot' >/dev/null 2>&1 || true
     # -no-reboot makes qemu EXIT on guest reboot; wait for the port to free
@@ -354,7 +374,7 @@ stop_qemu
 
 echo "== T3b: verify EVERYTHING survived the reboot (boot 4) =="
 MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
-Q "$HARD_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
+Q "$IT_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
     "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t3b-serial.log" 2>&1 < /dev/null &
 QPID=$!
 if wait_ssh 420; then
@@ -363,15 +383,16 @@ if wait_ssh 420; then
       && ok "T3b-2 .config marker survived reboot" || bad "T3b-2 config marker" "$TESTS/t2-serial.log"
     ssh_g 'cat ~/Documents/bnasec-proof' | grep -q "BNA_MARK_DOC_300" \
       && ok "T3b-3 Documents marker survived reboot" || bad "T3b-3 docs marker" "$TESTS/t2-serial.log"
-    PKG=$(ssh_g 'pacman -Q libreoffice-fresh' | tail -1)
-    echo "$PKG" | grep -q "libreoffice-fresh" \
+    PKG=$(ssh_g 'pacman -Q libreoffice-fresh 2>&1' | tail -1)
+    echo "$PKG" | grep -qE '^libreoffice-fresh [0-9]' \
       && ok "T3b-4 libreoffice-fresh STILL INSTALLED after reboot — PACKAGES PERSIST ($PKG)" \
-      || bad "T3b-4 package persistence" "$TESTS/t2-serial.log"
+      || bad "T3b-4 package persistence ($PKG)" "$TESTS/t3b-serial.log"
     SOF2=$(ssh_g 'soffice --version 2>/dev/null | head -1')
     echo "$SOF2" | grep -qi "libreoffice" \
       && ok "T3b-5 soffice still executes after reboot" || bad "T3b-5 soffice" "$TESTS/t2-serial.log"
     MAN=$(ssh_g 'cat ~/.config/bnasec-t3-manifest 2>/dev/null' | grep -oE 'sha256=[0-9a-f]{64}' | cut -d= -f2)
-    SUM2=$(ssh_g 'sha256sum ~/Documents/bnasec-1gb.bin 2>/dev/null | awk "{print \$1}"' | tail -1)
+    SUM2=$(ssh_g 'sha256sum "$HOME/Documents/bnasec-1gb.bin" 2>/dev/null | awk "{print \$1}"' | tail -1)
+    echo "manifest=$MAN"; echo "file    =$SUM2"
     if [ -n "$MAN" ] && [ "$MAN" = "$SUM2" ]; then
         ok "T3b-6 1GB file byte-identical after reboot — DATA INTEGRITY PROVEN"
     else
