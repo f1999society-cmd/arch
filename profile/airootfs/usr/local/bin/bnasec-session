@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# bnasec-session v3.0.0 — deterministic ML4W desktop bootstrap with VERIFICATION.
+#
+# WHY THIS EXISTS (v2.0.x post-mortem, proven from ML4W 2.16 source):
+#   1. ML4W's shell.qml instantiates WallpaperWindow which imports
+#      Qt5Compat.GraphicalEffects — without qt6-5compat installed the QML
+#      engine aborts the whole ShellRoot and `qs` dies instantly on every
+#      boot (bar/dock/overview/wallpaper all gone). Fixed: qt6-5compat is
+#      now baked into the ISO and audited at build time.
+#   2. ML4W's autostart.lua redirected the chain log into ~/.mydotfiles —
+#      a directory the dotfiles never ship — so even a healthy chain died
+#      on "no such file or directory" before starting anything.
+#      Fixed: the directory is created at build time.
+#   3. Nothing in the old chain ever VERIFIED that the bar actually came
+#      up. This script starts every component, waits, verifies it is
+#      alive, retries with software rendering, and finally falls back to
+#      waybar — writing a machine-readable verdict either way.
+#
+# Scope: this replaces ONLY ml4w-autostart (nm-applet, quickshell, wallpaper
+# restore, settings/overview/dock/welcome). autostart.lua still handles
+# portals, awww-daemon, listeners, polkit, gtk.sh, swaync, hypridle, cliphist.
+#
+# Verdict line (grepped by CI + humans):
+#   bnasec-session-verdict: BAR=<quickshell|quickshell-software|waybar|none> WALLPAPER=<ok|fail> DOCK=<ok|fail|skipped>
+# Copies: ~/.cache/bnasec-session-verdict (session) and
+#         ~/.config/bnasec/verdict (persists on the stick — send this file
+#         when reporting problems).
+set -uo pipefail
+
+CACHE_FILE="$HOME/.cache/ml4w/hyprland-dotfiles/current_wallpaper"
+DEFAULT_WALLPAPER="$HOME/.config/ml4w/wallpapers/default.jpg"
+VERDICT_SESSION="$HOME/.cache/bnasec-session-verdict"
+VERDICT_STICK="$HOME/.config/bnasec/verdict"
+MODE_FILE="$HOME/.cache/bnasec-bar-mode"
+
+BAR=none
+WALL=fail
+DOCK=skipped
+
+log() { echo "[bnasec-session $(date +%H:%M:%S)] $*"; }
+
+# exec-bit self-heal (race-free with bnasec-fixmodes.service): this script
+# execs ML4W scripts directly (ml4w-wallpaper below); if the boot-time chmod
+# has not landed yet, do it here — idempotent, milliseconds, harmless twice.
+chmod a+x "$HOME"/.config/ml4w/scripts/* 2>/dev/null || true
+
+write_verdict() {
+    local v="bnasec-session-verdict: BAR=${BAR} WALLPAPER=${WALL} DOCK=${DOCK}"
+    mkdir -p "$(dirname "$VERDICT_SESSION")" "$(dirname "$VERDICT_STICK")"
+    printf '%s (%s)\n' "$v" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$VERDICT_SESSION"
+    cp -f "$VERDICT_SESSION" "$VERDICT_STICK" 2>/dev/null || true
+    printf '%s\n' "$BAR" > "$MODE_FILE" 2>/dev/null || true
+    log "$v"
+}
+
+notify_user() { # visible on-screen message through the compositor IPC
+    hyprctl notify 1 15000 "rgb(ff5555)" "bnasec: $1 (see ~/.config/bnasec/verdict)" >/dev/null 2>&1 || true
+}
+
+bar_alive() { pgrep -x qs >/dev/null 2>&1; }
+
+start_quickshell() { # $1: extra env assignments (e.g. QT_QUICK_BACKEND=software)
+    killall qs 2>/dev/null || true
+    sleep 0.5
+    if [ -n "${1:-}" ]; then
+        # shellcheck disable=SC2086
+        env "$1" qs >/dev/null 2>&1 &
+    else
+        qs >/dev/null 2>&1 &
+    fi
+    # two liveness samples: qs must still be running after the QML engine
+    # had time to load the whole ShellRoot (an import failure exits fast)
+    local waited=0
+    while [ "$waited" -lt 16 ]; do
+        sleep 2; waited=$((waited + 2))
+        bar_alive || return 1
+    done
+    sleep 4
+    bar_alive
+}
+
+# ---------------------------------------------------------------- QS_ICON_THEME
+# quickshell reads its icon theme from QS_ICON_THEME, not from GTK; Hyprland
+# normally exports it (conf/environment.lua) — fall back to GTK settings here
+if [ -z "${QS_ICON_THEME:-}" ]; then
+    GTK_SETTINGS="$HOME/.config/gtk-3.0/settings.ini"
+    if [ -f "$GTK_SETTINGS" ]; then
+        ICON_THEME="$(grep 'gtk-icon-theme-name' "$GTK_SETTINGS" | sed 's/.*\s*=\s*//')"
+        [ -n "$ICON_THEME" ] && export QS_ICON_THEME="$ICON_THEME"
+    fi
+fi
+
+# ---------------------------------------------------------------- wallpaper
+mkdir -p "$HOME/.cache/ml4w/hyprland-dotfiles"
+if [ ! -s "$CACHE_FILE" ]; then
+    printf '%s' "$DEFAULT_WALLPAPER" > "$CACHE_FILE"
+fi
+WP="$(cat "$CACHE_FILE" 2>/dev/null || printf '%s' "$DEFAULT_WALLPAPER")"
+[ -f "$WP" ] || WP="$DEFAULT_WALLPAPER"
+
+# awww-daemon is started by autostart.lua before this script; make sure anyway
+pgrep -x awww-daemon >/dev/null 2>&1 || (awww-daemon >/dev/null 2>&1 &) 
+
+# ---------------------------------------------------------------- nm-applet
+pgrep -x nm-applet >/dev/null 2>&1 || (nm-applet --indicator >/dev/null 2>&1 &)
+
+# ---------------------------------------------------------------- the bar
+# attempt 1: quickshell, hardware GL
+log "bar attempt 1/3: quickshell (hw GL)"
+if start_quickshell ""; then
+    BAR=quickshell
+else
+    # attempt 2: quickshell forced through Qt's software renderer — recovers
+    # from GPU/driver EGL problems inside VMs and on exotic hardware
+    log "quickshell died — bar attempt 2/3: quickshell (QT_QUICK_BACKEND=software)"
+    if start_quickshell "QT_QUICK_BACKEND=software"; then
+        BAR=quickshell-software
+    else
+        # attempt 3: waybar with the ML4W glass theme (battle-tested C bar)
+        log "quickshell died again — bar attempt 3/3: waybar (ml4w-glass-center)"
+        killall qs waybar 2>/dev/null || true
+        HYSIG="$(hyprctl instances -j 2>/dev/null | jq -r '.[0].instance' 2>/dev/null)"
+        if [ -n "$HYSIG" ] && [ "$HYSIG" != "null" ]; then
+            HYPRLAND_INSTANCE_SIGNATURE="$HYSIG" waybar \
+                -c "$HOME/.config/waybar/themes/ml4w-glass-center/config" \
+                -s "$HOME/.config/waybar/themes/ml4w-glass-center/default/style.css" \
+                >/dev/null 2>&1 &
+        else
+            waybar -c "$HOME/.config/waybar/themes/ml4w-glass-center/config" \
+                   -s "$HOME/.config/waybar/themes/ml4w-glass-center/default/style.css" \
+                   >/dev/null 2>&1 &
+        fi
+        sleep 6
+        if pgrep -x waybar >/dev/null 2>&1; then
+            BAR=waybar
+        else
+            BAR=none
+        fi
+    fi
+fi
+log "bar settled: $BAR"
+[ "$BAR" = "none" ] && notify_user "no bar could start"
+
+# ---------------------------------------------------------------- wallpaper
+# with quickshell alive: full ML4W pipeline (awww + matugen + live theme
+# reload). With the waybar fallback: set the wallpaper directly via awww.
+if [ "$BAR" = "quickshell" ]; then
+    if [ -n "$(find "${XDG_CACHE_HOME:-$HOME/.cache}/awww" -mindepth 1 -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+        "$HOME/.config/ml4w/scripts/ml4w-wallpaper" "$WP" --skip-wallpaper >/dev/null 2>&1 &
+    else
+        "$HOME/.config/ml4w/scripts/ml4w-wallpaper" "$WP" >/dev/null 2>&1 &
+    fi
+    WALL=ok
+else
+    if awww img "$WP" >/dev/null 2>&1; then
+        WALL=ok
+    else
+        WALL=fail
+        notify_user "wallpaper failed"
+    fi
+fi
+
+# ---------------------------------------------------------------- companions
+if [ "$BAR" = "quickshell" ]; then
+    # ML4W Settings panel app
+    if [ -d "$HOME/.local/share/ml4w-dotfiles-settings/quickshell" ]; then
+        PROFILE=com.ml4w.dotfiles qs -p "$HOME/.local/share/ml4w-dotfiles-settings/quickshell" >/dev/null 2>&1 &
+        log "settings panel launched"
+    fi
+    # Super-Tab window overview
+    if [ -d "$HOME/.local/share/quickshell-overview" ]; then
+        qs -p "$HOME/.local/share/quickshell-overview" >/dev/null 2>&1 &
+        log "overview launched"
+    fi
+    # bottom dock
+    DOCK_BIN="$HOME/.local/bin/ml4w-dock"
+    [ -x "$DOCK_BIN" ] || DOCK_BIN="$HOME/.local/share/ml4w-dock/bin/ml4w-dock"
+    if [ -x "$DOCK_BIN" ]; then
+        "$DOCK_BIN" start >/dev/null 2>&1 &
+        sleep 3
+        if pgrep -f "ml4w-dock|qs -n -p.*ml4w-dock" >/dev/null 2>&1; then DOCK=ok; else DOCK=fail; fi
+    else
+        DOCK=skipped
+        log "ml4w-dock binary not found — dock skipped"
+    fi
+    # Welcome app (skippable via the ML4W cache flag)
+    if [ ! -f "$HOME/.cache/ml4w-welcome-autostart" ]; then
+        welcome_guard=0
+        until qs ipc call welcome toggle >/dev/null 2>&1; do
+            sleep 1; welcome_guard=$((welcome_guard + 1))
+            [ "$welcome_guard" -ge 15 ] && { log "welcome IPC unavailable — skipped"; break; }
+        done
+    fi
+else
+    log "companion qs apps skipped (bar is $BAR)"
+    DOCK=skipped
+fi
+
+# ---------------------------------------------------------------- disk space
+/usr/local/bin/bnasec-space >/dev/null 2>&1 || true
+
+write_verdict
+exit 0

@@ -249,7 +249,7 @@ bnasec_msg() {
 
 bnasec_ensure_persist() {
     local persist_dev="/dev/disk/by-label/persistence"
-    local boot_dev boot_disk newpart rc
+    local boot_dev boot_disk newpart rc resolved
 
     if [ ! -e "${persist_dev}" ]; then
         # Locate the device the ISO itself is booting from.
@@ -274,6 +274,17 @@ bnasec_ensure_persist() {
         # block pool: the 5% reserve once made a half-full 56G stick report
         # ENOSPC and wedge the allocator mid-download.
         mkfs.ext4 -q -m 0 -L persistence "${newpart}" || return 1
+    fi
+
+    # v3.0.0: with cow_label=persistence this function is called TWICE (once
+    # for the cow device, once for the data bind mount). On the second call
+    # the partition is ALREADY mounted read-write (at /run/archiso/cowspace)
+    # and fsck'ing a live filesystem would be destructive. The initramfs has
+    # no findmnt, so match the resolved device in /proc/mounts.
+    resolved="$(realpath "${persist_dev}" 2>/dev/null)"
+    if [ -n "${resolved}" ] && grep -qs "^${resolved} " /proc/mounts; then
+        bnasec_msg ":: bnasec: persistence fs already mounted — skipping fsck"
+        return 0
     fi
 
     bnasec_msg ":: bnasec: checking persistence filesystem"

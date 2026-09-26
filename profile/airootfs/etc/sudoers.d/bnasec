@@ -1,2 +1,4 @@
-# bnasec live — wheel may sudo with its own password (bna / bnasec)
+# bnasec live — wheel keeps password sudo; the live user bna is trusted
+# (single-user live system, password bnasec is printed in the release notes).
 %wheel ALL=(ALL:ALL) ALL
+bna ALL=(ALL:ALL) NOPASSWD: ALL

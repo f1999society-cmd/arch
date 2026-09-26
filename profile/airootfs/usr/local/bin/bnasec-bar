@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# bnasec-bar v3.0.0 — control the top bar: quickshell <-> waybar.
+#
+#   bnasec-bar status      show what is running
+#   bnasec-bar quickshell  force quickshell (hardware GL first, software retry)
+#   bnasec-bar waybar      force waybar (ML4W glass theme)
+#   bnasec-bar switch      toggle between the two (bound to Super+Ctrl+B)
+#   bnasec-bar restart     restart whichever mode is active
+#
+# State: ~/.cache/bnasec-bar-mode (per session) and the persistent verdict at
+# ~/.config/bnasec/verdict so problems survive reboots and can be reported.
+set -uo pipefail
+
+MODE_FILE="$HOME/.cache/bnasec-bar-mode"
+VERDICT_STICK="$HOME/.config/bnasec/verdict"
+GLASS_CFG="$HOME/.config/waybar/themes/ml4w-glass-center/config"
+GLASS_CSS="$HOME/.config/waybar/themes/ml4w-glass-center/default/style.css"
+
+log() { echo "[bnasec-bar $(date +%H:%M:%S)] $*"; }
+
+write_state() { # $1 = mode that is now active
+    local mode="$1"
+    printf '%s\n' "$mode" > "$MODE_FILE" 2>/dev/null || true
+    {
+        printf 'bnasec-bar: mode=%s (%s)\n' "$mode" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } >> "$VERDICT_STICK" 2>/dev/null || true
+}
+
+start_quickshell() {
+    killall waybar 2>/dev/null || true
+    killall qs 2>/dev/null || true
+    sleep 0.5
+    qs >/dev/null 2>&1 &
+    local waited=0
+    while [ "$waited" -lt 16 ]; do
+        sleep 2; waited=$((waited + 2))
+        pgrep -x qs >/dev/null 2>&1 || return 1
+    done
+    sleep 4
+    pgrep -x qs >/dev/null 2>&1
+}
+
+start_quickshell_software() {
+    killall qs 2>/dev/null || true
+    sleep 0.5
+    QT_QUICK_BACKEND=software qs >/dev/null 2>&1 &
+    local waited=0
+    while [ "$waited" -lt 14 ]; do
+        sleep 2; waited=$((waited + 2))
+        pgrep -x qs >/dev/null 2>&1 || return 1
+    done
+    sleep 3
+    pgrep -x qs >/dev/null 2>&1
+}
+
+start_waybar() {
+    killall qs waybar 2>/dev/null || true
+    sleep 0.5
+    HYSIG="$(hyprctl instances -j 2>/dev/null | jq -r '.[0].instance' 2>/dev/null)"
+    if [ -n "$HYSIG" ] && [ "$HYSIG" != "null" ]; then
+        HYPRLAND_INSTANCE_SIGNATURE="$HYSIG" waybar -c "$GLASS_CFG" -s "$GLASS_CSS" >/dev/null 2>&1 &
+    else
+        waybar -c "$GLASS_CFG" -s "$GLASS_CSS" >/dev/null 2>&1 &
+    fi
+    sleep 5
+    pgrep -x waybar >/dev/null 2>&1
+}
+
+cmd="${1:-status}"
+case "$cmd" in
+    status)
+        qs_n="$(pgrep -cx qs 2>/dev/null || echo 0)"
+        wb_n="$(pgrep -cx waybar 2>/dev/null || echo 0)"
+        mode="unknown"; [ -f "$MODE_FILE" ] && mode="$(cat "$MODE_FILE")"
+        echo "bnasec-bar: mode=$mode quickshell_procs=$qs_n waybar_procs=$wb_n"
+        [ -f "$VERDICT_STICK" ] && tail -3 "$VERDICT_STICK"
+        ;;
+    quickshell)
+        log "forcing quickshell (hardware GL)"
+        if start_quickshell; then write_state quickshell; log "quickshell running"
+        elif start_quickshell_software; then write_state quickshell-software; log "quickshell running (software rendering)"
+        else log "quickshell would not stay up — staying on $(cat "$MODE_FILE" 2>/dev/null || echo unknown)"; exit 1; fi
+        ;;
+    waybar)
+        log "forcing waybar (ml4w-glass-center)"
+        if start_waybar; then write_state waybar; log "waybar running"
+        else log "waybar failed to start"; exit 1; fi
+        ;;
+    switch)
+        if pgrep -x qs >/dev/null 2>&1; then
+            log "switching quickshell -> waybar"
+            if start_waybar; then write_state waybar; else log "waybar start failed — quickshell restored"; start_quickshell; exit 1; fi
+        else
+            log "switching -> quickshell"
+            if start_quickshell; then write_state quickshell
+            elif start_quickshell_software; then write_state quickshell-software
+            else log "quickshell start failed — restoring waybar"; start_waybar || true; exit 1; fi
+        fi
+        ;;
+    restart)
+        mode="quickshell"; [ -f "$MODE_FILE" ] && mode="$(cat "$MODE_FILE")"
+        case "$mode" in
+            waybar) exec "$0" waybar ;;
+            *)      exec "$0" quickshell ;;
+        esac
+        ;;
+    *)
+        echo "usage: bnasec-bar {status|quickshell|waybar|switch|restart}" >&2
+        exit 2
+        ;;
+esac

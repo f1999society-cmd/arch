@@ -1,0 +1,15 @@
+[Unit]
+Description=bnasec — install SSH public key from kernel cmdline (bnasec.sshkey=)
+Documentation=man:ssh(1)
+# must run before sshd so the key is in place when the daemon starts listening
+Before=sshd.service
+After=local-fs.target
+ConditionPathExists=/proc/cmdline
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bnasec-sshd-key
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

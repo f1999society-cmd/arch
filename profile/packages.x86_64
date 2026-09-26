@@ -92,6 +92,14 @@ qt6-svg
 qt6-virtualkeyboard
 qt6-multimedia-ffmpeg
 quickshell
+# v3.0.0 ROOT-CAUSE FIX: the ML4W quickshell shell.qml instantiates
+# WallpaperWindow which imports Qt5Compat.GraphicalEffects. That module lives
+# in qt6-5compat — NOT a quickshell dependency and never shipped → the QML
+# engine failed the import inside the ShellRoot → qs aborted on every boot →
+# no bar, no dock, no wallpaper, on any hardware. ci/build-iso.sh now audits
+# every Qt* import in the baked QML trees against the container's
+# /usr/lib/qt6/qml tree so this class of bug can never ship again.
+qt6-5compat
 awww
 matugen
 nwg-displays
@@ -109,6 +117,10 @@ gawk
 
 # --------------------------------------------------- desktop utilities
 rofi
+# v3.0.0: fallback top bar — bnasec-session auto-starts waybar (ML4W glass
+# theme) when quickshell cannot run; 'bnasec-bar switch' flips between them
+# (Super+Ctrl+B). ML4W's own waybar themes ship with the dotfiles.
+waybar
 wlogout
 kitty
 thunar

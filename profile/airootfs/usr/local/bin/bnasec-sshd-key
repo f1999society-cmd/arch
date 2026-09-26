@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# bnasec-sshd-key v3.0.0 — opt-in SSH key injection from the kernel command line.
+#
+# Purpose: gives the CI rig (and power users) full scripted control over a
+# booted live session WITHOUT weakening the shipped ISO:
+#   - sshd ships ENABLED but with PasswordAuthentication=no and an EMPTY
+#     authorized_keys — without a key nobody gets in.
+#   - only a boot that explicitly passes bnasec.sshkey="<pubkey>" on its
+#     kernel command line installs that key for user bna.
+#   - the key lives in the volatile root unless ~/.ssh is persisted (it is
+#     not) — a normal persistent boot starts clean again.
+#
+# Supported forms:
+#   bnasec.sshkey="ssh-ed25519 AAAA... comment"   (quoted — spaces inside)
+#   bnasec.sshkey=ssh-ed25519%20AAAA...           (%20 escapes for spaces)
+set -uo pipefail
+
+AUTH="/home/bna/.ssh/authorized_keys"
+
+raw="$(cat /proc/cmdline 2>/dev/null || true)"
+key=""
+# form 1: quoted value with spaces
+if [[ "$raw" =~ bnasec\.sshkey=\"([^\"]+)\" ]]; then
+    key="${BASH_REMATCH[1]}"
+else
+    # form 2: unquoted token (may carry %20 escapes)
+    for arg in $raw; do
+        case "$arg" in
+            bnasec.sshkey=*)
+                key="${arg#bnasec.sshkey=}"
+                key="${key//%20/ }"
+                ;;
+        esac
+    done
+fi
+
+[ -n "$key" ] || { echo "bnasec-sshd-key: no bnasec.sshkey= on cmdline — leaving authorized_keys empty"; exit 0; }
+
+install -d -m 700 -o bna -g bna /home/bna/.ssh
+grep -qxF "$key" "$AUTH" 2>/dev/null || printf '%s\n' "$key" >> "$AUTH"
+chown bna:bna "$AUTH" 2>/dev/null || true
+chmod 600 "$AUTH" 2>/dev/null || true
+echo "bnasec-sshd-key: key installed for bna (${key%% *}, fingerprint below)"
+su - bna -s /bin/sh -c "ssh-keygen -lf ~/.ssh/authorized_keys" 2>/dev/null | head -2 || true
+exit 0

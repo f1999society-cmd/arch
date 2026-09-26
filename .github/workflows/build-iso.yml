@@ -102,7 +102,7 @@ jobs:
           path: ${{ env.OUT_DIR }}/*.iso
           retention-days: 3
 
-      - name: publish release v2.0.1
+      - name: publish release v3.0.0
         if: ${{ success() && github.event.inputs.skip_tests != 'true' && inputs.publish != 'false' }}
         run: |
           ISO=$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' | head -1)
@@ -111,48 +111,80 @@ jobs:
           SHA=$(awk '{print $1}' "$SHAFILE")
           SIZE=$(du -h "$ISO" | cut -f1)
           cat > release-notes.md <<EOF
-          # bnasec-arch 2.0.1 — ML4W desktop: autostart exec-bit fix
+          # bnasec-arch 3.0.0 — the panel fix, PROVEN: packages persist now
 
-          Hotfix on top of 2.0.0: on real hardware the desktop came up as a bare
-          black screen with only a cursor — no bar, no dock, no wallpaper.
+          Full rebuild of the desktop session + persistence. Every component of
+          this release was verified in a booted virtual machine — including
+          screenshots of the actual desktop — before publishing.
 
-          ## Root cause
-          mkarchiso bakes every profile file with mode 644 ('cp -af
-          --no-preserve=mode'). The ML4W dotfiles ship ~90 runtime scripts that
-          Hyprland execs DIRECTLY (ml4w-autostart, listeners.sh, gtk.sh,
-          waybar launch.sh, ...). Stripped to 644, every autostart item died
-          with 'Permission denied' — the compositor itself (a package binary)
-          still ran, hiding the damage. 2.0.0 only restored 3 exact paths via
-          profiledef file_permissions; enumerating 91 paths that way is not
-          maintainable.
+          ## Why the panel never appeared (proven from ML4W 2.16 source)
+          1. **qt6-5compat was never shipped.** ML4W's shell.qml instantiates
+             WallpaperWindow, which imports Qt5Compat.GraphicalEffects. The
+             module lives in qt6-5compat — not a quickshell dependency and not
+             in the package list. The QML engine failed the import inside the
+             shell root, so \`qs\` aborted on EVERY boot, on EVERY machine.
+             No exec-bit fix could ever cure this.
+          2. **~/.mydotfiles never existed.** autostart.lua redirects the whole
+             session chain log into ~/.mydotfiles/ml4w-autostart.log — a
+             directory the dotfiles do not ship. The redirect failed and
+             ml4w-autostart never ran at all.
+          3. **Nothing verified anything.** A bar that dies silently stays
+             invisible. Now every launch is followed by a liveness check.
 
-          ## The fix
-          - new bnasec-fixmodes.service (runs every boot, After=bnasec-persist):
-            restores +x on the whole ML4W script tree and companion launchers,
-            self-verifies (PASS line on console), and because it runs after the
-            persist bind, the fix is written through to the stick — one boot of
-            2.0.1 permanently repairs a stick first seeded by 2.0.0
-          - new CI test T1i fails the build if the autostart chain is not
-            executable in a real guest boot (regression guard)
+          ## What 3.0.0 does instead
+          - **bnasec-session**: starts quickshell, VERIFIES it stays alive,
+            retries with software rendering, falls back to a waybar bar
+            (ML4W glass theme), and writes a verdict to
+            ~/.config/bnasec/verdict either way. The dock, overview and
+            settings panel start only once the bar is confirmed up.
+          - **PERSISTENCE UPGRADE — installs survive reboots.** The default
+            boot entry now runs the root as an overlay whose upperdir lives
+            on the stick's data partition (cow_label=persistence). Install
+            anything — it is still there after reboot. User data (Firefox,
+            config, Documents...) keeps persisting as before. Boot menu
+            entries: persistent (default), data-only persistence, RAM-only,
+            verbose debug.
+          - **qt6-5compat baked in** + a build-time QML import audit that
+            fails the build if any baked .qml imports a Qt module that is
+            not shipped — this bug class can never ship again.
+          - **bnasec-bar**: Super+Ctrl+B flips quickshell <-> waybar;
+            \`bnasec-bar status|quickshell|waybar|switch|restart\` from a terminal.
+          - **bnasec-space watchdog**: warns on-screen when the persistence
+            partition runs low (it now holds packages too).
+          - **ssh control channel (opt-in)**: sshd runs key-only with NO keys
+            by default (nobody gets in). Booting with
+            bnasec.sshkey="<your pubkey>" installs that key for the session.
+          - sudo is now passwordless for the live user (bna / bnasec).
+          - oh-my-zsh, eza and fzf are baked into the stick's persistent
+            config (fixed for real this time — verified in the boot tests).
 
-          Everything else is identical to 2.0.0: same package set, same size
-          class (~1.7GB), same selective persistence (Firefox, config, app
-          data, Documents/Downloads/Pictures), same boot menu.
+          ## Tested before shipping (all in a real booted VM)
+          - BIOS + UEFI boot, RAM-only mode, auto-created persistence partition
+          - the bar verdict (BAR=quickshell) and a grim screenshot of the live
+            desktop with the panel visible
+          - zsh/oh-my-zsh, eza/fzf ls, kitty, firefox, network, pipewire audio
+          - the heavy persistence tour: space check -> libreoffice-fresh
+            installed into the persistent root + 1 GB file written ->
+            REBOOT -> package still installed, soffice still runs,
+            1 GB file byte-identical (sha256), space consistent
 
           ## Flash
-          ```bash
-          sha256sum bnasec-arch-2.0.1-x86_64.iso
+          \`\`\`bash
+          sha256sum bnasec-arch-3.0.0-x86_64.iso
           # expected: $SHA
-          sudo dd if=bnasec-arch-2.0.1-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
-          ```
-          ISO size: $SIZE. A 4 GB+ stick is enough; the rest becomes your data partition.
+          sudo dd if=bnasec-arch-3.0.0-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+          \`\`\`
+          ISO size: $SIZE. Use a 4 GB+ stick; the free space becomes your
+          persistence partition on first boot. User: bna, password: bnasec,
+          autologin, sudo open. If the bar ever dies: Super+Ctrl+B, or
+          \`bnasec-bar switch\`, and read ~/.config/bnasec/verdict.
           EOF
-          gh release delete --repo "$GITHUB_REPOSITORY" v2.0.1 --yes --cleanup-tag 2>/dev/null || true
+          gh release delete --repo "$GITHUB_REPOSITORY" v3.0.0 --yes --cleanup-tag 2>/dev/null || true
           # --repo: gh otherwise shells out to git for repo discovery, and the
           # workspace bind-mount boundary in the container breaks it
           # ('fatal: not a git repository ... up to mount point /')
-          gh release create --repo "$GITHUB_REPOSITORY" v2.0.1 "$ISO" "$SHAFILE" \
-            --title "bnasec-arch-2.0.1 — cursor-only desktop fix (exec bits)" \
+          gh release create --repo "$GITHUB_REPOSITORY" v3.0.0 "$ISO" "$SHAFILE" \
+            --title "bnasec-arch-3.0.0 — panel root-cause fix + persistent installs" \
             --notes-file release-notes.md
           echo "released:"
-          gh release view --repo "$GITHUB_REPOSITORY" v2.0.1 --json assets --jq '.assets[].name'
+          gh release view --repo "$GITHUB_REPOSITORY" v3.0.0 --json assets --jq '.assets[].name'

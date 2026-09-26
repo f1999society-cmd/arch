@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# bnasec-space v3.0.0 — persistence disk space watchdog.
+#
+# The persistence partition (label 'persistence') holds EVERYTHING that
+# survives a reboot: all root changes (installed packages — the root is an
+# overlay whose upperdir lives on it) and all user data (bind-mounted home
+# dirs). If it fills up, installs fail and the session degrades — so warn
+# loudly and early.
+#
+# Exit codes: 0 = fine/warned only, 3 = critically low (<300MB).
+set -uo pipefail
+
+MNT="/var/lib/bnasec-persist"
+[ -d "$MNT" ] || exit 0
+mountpoint -q "$MNT" 2>/dev/null || exit 0   # volatile session — nothing to watch
+
+AVAIL_KB=$(df -Pk "$MNT" 2>/dev/null | awk 'NR==2 {print $4}')
+[ -n "${AVAIL_KB:-}" ] || exit 0
+AVAIL_MB=$((AVAIL_KB / 1024))
+TOTAL_MB=$(df -Pk "$MNT" 2>/dev/null | awk 'NR==2 {print $2}')
+TOTAL_MB=$((TOTAL_MB / 1024))
+
+echo "bnasec-space: persistence ${AVAIL_MB}MB free of ${TOTAL_MB}MB"
+
+if [ "$AVAIL_MB" -lt 300 ]; then
+    hyprctl notify 0 20000 "rgb(ff5555)" \
+        "bnasec: persistence nearly FULL (${AVAIL_MB}MB left) — clean up or boots may fail" >/dev/null 2>&1 || true
+    logger -t bnasec-space "CRITICAL: persistence ${AVAIL_MB}MB free"
+    exit 3
+elif [ "$AVAIL_MB" -lt 2000 ]; then
+    hyprctl notify 1 15000 "rgb(f1fa8c)" \
+        "bnasec: persistence ${AVAIL_MB}MB free — consider cleaning up" >/dev/null 2>&1 || true
+    logger -t bnasec-space "WARN: persistence ${AVAIL_MB}MB free"
+fi
+exit 0

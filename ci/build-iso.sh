@@ -295,6 +295,67 @@ sed 's|^source <(fzf --zsh)|command -v fzf >/dev/null 2>\&1 \&\& source <(fzf --
   /home/bna/.config/zshrc/20-customization > /home/bna/.config/zshrc/custom/20-customization
 chown -R bna:bna /home/bna/.config/ohmyzsh /home/bna/.config/zshrc
 
+#  (e) v3.0.0 ROOT-CAUSE FIX #2: ML4W's autostart.lua redirects the session
+#      chain log into ~/.mydotfiles/ml4w-autostart.log — but the dotfiles
+#      never ship that directory. The shell cannot open the log, the whole
+#      ml4w-autostart line dies with 'no such file or directory' and nothing
+#      in the chain (bar, dock, wallpaper) ever starts. Create the dir.
+install -d -m 755 -o bna -g bna /home/bna/.mydotfiles
+#  (f) v3.0.0 ROOT-CAUSE FIX #3: replace the ml4w-autostart script (verified
+#      bootstrap with quickshell->software-render->waybar fallback + verdict).
+#      Original preserved next to it for manual debugging.
+cp -a /home/bna/.config/ml4w/scripts/ml4w-autostart /home/bna/.config/ml4w/scripts/ml4w-autostart.ml4w-orig
+cat > /home/bna/.config/ml4w/scripts/ml4w-autostart <<'EOF'
+#!/usr/bin/env bash
+# bnasec v3.0.0: ML4W's autostart chain replaced by bnasec-session —
+# every component is launched, WAITED FOR and VERIFIED; quickshell retries
+# under QT_QUICK_BACKEND=software, then falls back to waybar; a machine
+# readable verdict is written to ~/.config/bnasec/verdict either way.
+# Original ML4W script: ml4w-autostart.ml4w-orig
+exec /usr/local/bin/bnasec-session
+EOF
+chmod 755 /home/bna/.config/ml4w/scripts/ml4w-autostart
+chown bna:bna /home/bna/.config/ml4w/scripts/ml4w-autostart /home/bna/.config/ml4w/scripts/ml4w-autostart.ml4w-orig
+#  (g) bnasec extras in the Hyprland lua config: Super+Ctrl+B flips the bar.
+#      custom.lua is the official user hook — hyprland.lua require()s it when
+#      present (hyprland.lua line 40).
+cat > /home/bna/.config/hypr/custom.lua <<'EOF'
+-- bnasec v3.0.0 additions (official user hook, loaded by hyprland.lua)
+hl.bind("SUPER + CTRL + B", hl.dsp.exec_cmd("/usr/local/bin/bnasec-bar switch"),
+        { description = "bnasec: switch top bar (quickshell <-> waybar)" })
+EOF
+chown bna:bna /home/bna/.config/hypr/custom.lua
+#  (h) waybar fallback bar sanity: the exact files bnasec-session/bnasec-bar
+#      launch must exist in the dotfiles we just synced
+[ -f /home/bna/.config/waybar/themes/ml4w-glass-center/config ] \
+  || { echo "!! waybar fallback config missing (themes/ml4w-glass-center/config)"; exit 1; }
+[ -f /home/bna/.config/waybar/themes/ml4w-glass-center/default/style.css ] \
+  || { echo "!! waybar fallback style missing (themes/ml4w-glass-center/default/style.css)"; exit 1; }
+echo "session chain staged: bnasec-session shim + custom.lua + waybar fallback files"
+
+#  (i) v3.0.0 QML IMPORT AUDIT — the fix that makes root cause #1 unshippable.
+#      Every `import Qt*` in every baked .qml file must map to a module that
+#      exists under /usr/lib/qt6/qml in this container (which has the full
+#      package list installed). This is what would have caught the missing
+#      qt6-5compat (Qt5Compat.GraphicalEffects) that silently killed the bar.
+echo "== [4b] QML import audit (every Qt module must exist in qt6 qml tree) =="
+QML_BASE=/usr/lib/qt6/qml
+BAD_IMPORTS=()
+while IFS= read -r mod; do
+    rel="${mod//./\/}"
+    if [ ! -e "$QML_BASE/$rel" ] && ! ls "$QML_BASE/$rel".* >/dev/null 2>&1; then
+        BAD_IMPORTS+=("$mod")
+        echo "  MISSING: import $mod  ($QML_BASE/$rel not found)"
+    fi
+done < <(grep -rhoE '^\s*import\s+Qt[A-Za-z0-9_.]*' /home/bna/.config /home/bna/.local/share \
+         2>/dev/null | awk '{print $2}' | sort -u)
+if [ "${#BAD_IMPORTS[@]}" -gt 0 ]; then
+    echo "!! QML import audit FAILED: ${BAD_IMPORTS[*]}"
+    echo "   add the owning package(s) to profile/packages.x86_64"
+    exit 1
+fi
+echo "QML audit: all Qt imports resolve ($(grep -rhoE '^\s*import\s+Qt[A-Za-z0-9_.]*' /home/bna/.config /home/bna/.local/share 2>/dev/null | awk '{print $2}' | sort -u | wc -l) unique modules)"
+
 # clone dirs and caches never enter the ISO
 rm -rf /home/bna/.ml4w-src /home/bna/.cache /tmp/ml4w-settings /tmp/ml4w-overview /tmp/ml4w-dock
 chown -R bna:bna /home/bna
@@ -348,19 +409,31 @@ chmod 755 "$A/usr/local/bin/bnasec-toolbox"
   || { echo "!! bnasec-persist-bind missing from profile:"; ls -la "$A/usr/local/bin/" 2>&1; exit 1; }
 chmod 755 "$A/usr/local/bin/bnasec-persist-bind"
 [ -f "$A/usr/local/bin/bnasec-fixmodes" ] \
-  || { echo "!! bnasec-fixmodes missing from profile:"; ls -la "$A/usr/local/bin/" 2>&1; exit 1; }
+  || { echo "!! bnasec-fixmodes missing from profile:"; ls -la "$A/usr/local/bin/bnasec-fixmodes" 2>&1; exit 1; }
 chmod 755 "$A/usr/local/bin/bnasec-fixmodes"
+# v3.0.0 session chain scripts (mode-stripped by mkarchiso if not listed in
+# profiledef file_permissions — they ARE listed; chmod again here as defense)
+for s in bnasec-session bnasec-bar bnasec-space bnasec-sshd-key; do
+  [ -f "$A/usr/local/bin/$s" ] || { echo "!! $s missing from profile"; exit 1; }
+  chmod 755 "$A/usr/local/bin/$s"
+done
+[ -f "$A/etc/ssh/sshd_config.d/bnasec.conf" ] || { echo "!! sshd_config.d/bnasec.conf missing"; exit 1; }
+[ -e "$A/etc/systemd/system/multi-user.target.wants/sshd.service" ] \
+  || { echo "!! sshd.service not enabled in profile"; exit 1; }
+[ -e "$A/etc/systemd/system/multi-user.target.wants/bnasec-sshd-key.service" ] \
+  || { echo "!! bnasec-sshd-key.service not enabled in profile"; exit 1; }
 [ -e "$A/etc/systemd/system/multi-user.target.wants/bnasec-fixmodes.service" ] \
   || { echo "!! bnasec-fixmodes.service not enabled in profile:"; ls -la "$A/etc/systemd/system/multi-user.target.wants/" 2>&1; exit 1; }
 [ -e "$A/etc/systemd/system/multi-user.target.wants/bnasec-persist.service" ] \
   || { echo "!! bnasec-persist.service not enabled in profile:"; ls -la "$A/etc/systemd/system/multi-user.target.wants/" 2>&1; exit 1; }
 echo "toolbox staged: $(du -h "$A/usr/local/bin/bnasec-toolbox" | cut -f1) sha12=$(sha256sum "$A/usr/local/bin/bnasec-toolbox" | cut -c1-12)"
 cat > "$A/usr/share/bnasec/BUILD-INFO" <<EOF
-iso: bnasec-arch-2.0.1
+iso: bnasec-arch-3.0.0
 built: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 ml4w-commit: $ML4W_HEAD
 ml4w-repo: $ML4W_REPO
-persistence: selective (.mozilla .config .local/share Documents Downloads Pictures)
+persistence: root-overlay (cow_label=persistence, installs survive reboot) + selective home data (.mozilla .config .local/share Documents Downloads Pictures)
+session: bnasec-session (verified quickshell -> software-render -> waybar fallback)
 packages: $(pacman -Qq | wc -l)
 toolbox-sha256-12: $(sha256sum "$A/usr/local/bin/bnasec-toolbox" | cut -c1-12)
 EOF
@@ -586,11 +659,23 @@ unsquashfs -f -d "$CHECK" "$SFS" \
   'home/bna/.config/hypr' 'home/bna/.config/quickshell' 'home/bna/.zprofile' \
   'home/bna/.local/share/ml4w-dotfiles-settings' 'home/bna/.local/share/ml4w-dock' \
   'home/bna/.local/share/quickshell-overview' \
+  'home/bna/.mydotfiles' \
+  'home/bna/.config/ml4w/scripts/ml4w-autostart' \
+  'home/bna/.config/hypr/custom.lua' \
+  'home/bna/.config/waybar/themes/ml4w-glass-center/config' \
   'usr/local/bin/bnasec-toolbox' 'usr/local/bin/bnasec-persist-bind' 'usr/local/bin/bnasec-fixmodes' \
+  'usr/local/bin/bnasec-session' 'usr/local/bin/bnasec-bar' 'usr/local/bin/bnasec-space' \
+  'usr/local/bin/bnasec-sshd-key' \
+  'usr/bin/waybar' 'usr/bin/qs' \
+  'usr/lib/qt6/qml/Qt5Compat/GraphicalEffects' \
   'etc/systemd/system/bnasec-persist.service' \
   'etc/systemd/system/bnasec-fixmodes.service' \
+  'etc/systemd/system/bnasec-sshd-key.service' \
+  'etc/ssh/sshd_config.d/bnasec.conf' \
   'etc/systemd/system/multi-user.target.wants/bnasec-persist.service' \
   'etc/systemd/system/multi-user.target.wants/bnasec-fixmodes.service' \
+  'etc/systemd/system/multi-user.target.wants/bnasec-sshd-key.service' \
+  'etc/systemd/system/multi-user.target.wants/sshd.service' \
   'etc/pacman.conf' \
   'usr/lib/initcpio/hooks/archiso_bnasec' 'usr/bin/sudo' 'usr/bin/su' \
   'usr/bin/mount' 'usr/bin/passwd' 'usr/share/bnasec' \
@@ -604,6 +689,20 @@ FAIL=0
 [ -d "$CHECK/home/bna/.local/share/quickshell-overview" ] && echo "PASS quickshell overview baked" || { echo "FAIL quickshell-overview missing"; FAIL=1; }
 [ -x "$CHECK/usr/local/bin/bnasec-persist-bind" ] && echo "PASS persist-bind script baked" || { echo "FAIL bnasec-persist-bind missing/not-exec — context:"; ls -la "$CHECK/usr/local/bin/" 2>&1; unsquashfs -ll "$SFS" 2>/dev/null | grep -E 'usr/local/bin' | head; FAIL=1; }
 [ -x "$CHECK/usr/local/bin/bnasec-fixmodes" ] && echo "PASS fixmodes script baked (v2.0.1 exec-bit restore)" || { echo "FAIL bnasec-fixmodes missing/not-exec"; FAIL=1; }
+# v3.0.0 session chain + root-cause fixes
+[ -x "$CHECK/usr/local/bin/bnasec-session" ] && echo "PASS bnasec-session baked (verified bar bootstrap)" || { echo "FAIL bnasec-session missing/not-exec"; FAIL=1; }
+[ -x "$CHECK/usr/local/bin/bnasec-bar" ] && echo "PASS bnasec-bar baked (quickshell<->waybar switch)" || { echo "FAIL bnasec-bar missing/not-exec"; FAIL=1; }
+[ -x "$CHECK/usr/local/bin/bnasec-space" ] && echo "PASS bnasec-space baked (disk watchdog)" || { echo "FAIL bnasec-space missing/not-exec"; FAIL=1; }
+[ -x "$CHECK/usr/local/bin/bnasec-sshd-key" ] && echo "PASS bnasec-sshd-key baked (opt-in ssh control channel)" || { echo "FAIL bnasec-sshd-key missing/not-exec"; FAIL=1; }
+[ -d "$CHECK/home/bna/.mydotfiles" ] && echo "PASS .mydotfiles exists (autostart.lua log redirect target — root cause #2)" || { echo "FAIL .mydotfiles missing — ml4w-autostart would die on log redirect"; FAIL=1; }
+[ -f "$CHECK/home/bna/.config/ml4w/scripts/ml4w-autostart" ] && grep -q "exec /usr/local/bin/bnasec-session" "$CHECK/home/bna/.config/ml4w/scripts/ml4w-autostart" && echo "PASS ml4w-autostart is the bnasec-session shim" || { echo "FAIL ml4w-autostart shim not baked"; FAIL=1; }
+[ -f "$CHECK/home/bna/.config/hypr/custom.lua" ] && echo "PASS custom.lua baked (Super+Ctrl+B bar switch)" || { echo "FAIL custom.lua missing"; FAIL=1; }
+[ -f "$CHECK/usr/bin/waybar" ] && echo "PASS waybar fallback binary baked" || { echo "FAIL waybar missing"; FAIL=1; }
+[ -e "$CHECK/usr/lib/qt6/qml/Qt5Compat/GraphicalEffects" ] && echo "PASS Qt5Compat.GraphicalEffects baked (root cause #1: qs WallpaperWindow import)" || { echo "FAIL qt6-5compat module missing from SFS — qs would abort again"; FAIL=1; }
+[ -f "$CHECK/etc/ssh/sshd_config.d/bnasec.conf" ] && echo "PASS sshd key-only config baked" || { echo "FAIL sshd config missing"; FAIL=1; }
+[ -L "$CHECK/etc/systemd/system/multi-user.target.wants/sshd.service" ] && echo "PASS sshd enabled (no keys = closed)" || { echo "FAIL sshd not enabled"; FAIL=1; }
+[ -L "$CHECK/etc/systemd/system/multi-user.target.wants/bnasec-sshd-key.service" ] && echo "PASS bnasec-sshd-key service enabled" || { echo "FAIL sshd-key service not enabled"; FAIL=1; }
+[ -f "$CHECK/home/bna/.config/waybar/themes/ml4w-glass-center/config" ] && echo "PASS waybar fallback theme files baked" || { echo "FAIL waybar glass theme missing"; FAIL=1; }
 # NOTE: ML4W scripts are EXPECTED to be 644 inside the SFS — mkarchiso strips
 # modes for everything not listed in profiledef file_permissions (91 script
 # paths, not enumerable sanely). bnasec-fixmodes.service restores them at
