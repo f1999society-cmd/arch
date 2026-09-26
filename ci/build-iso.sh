@@ -148,7 +148,8 @@ DEEZ_OMIT=(qt5ct kvantum-qt5 qt5-wayland qt5-imageformats qt5-quickcontrols qt5-
 LOCALREPO=/tmp/bnasec-localrepo
 mkdir -p "$LOCALREPO"
 STUBBUILT=()
-id builduser >/dev/null 2>&1 || useradd -m builduser
+# explicit high uid: the default would hand builduser 1000, which bna needs
+id builduser >/dev/null 2>&1 || useradd -m -u 1500 builduser
 echo 'builduser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/98-builduser
 chmod 440 /etc/sudoers.d/98-builduser
 for p in "${DEEZ_OMIT[@]}"; do
