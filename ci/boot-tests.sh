@@ -73,8 +73,12 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
   echo "installing qemu for boot tests"
   PAC=pacman-static
   command -v pacman-static >/dev/null 2>&1 || PAC=pacman
+  # openssh: the purge phase strips the container to the build keep-closure —
+  # ssh-keygen/ssh/scp are GONE by the time tests run. Without them the CI
+  # control channel silently degrades (guest saw 'no bnasec.sshkey= on
+  # cmdline', run 36266931861).
   $PAC -Sy --noconfirm --needed --overwrite '/usr/lib/libstdc++*' \
-    qemu-desktop qemu-img edk2-ovmf socat python mesa virglrenderer > /tmp/qemu-install.log 2>&1 \
+    qemu-desktop qemu-img edk2-ovmf socat python mesa virglrenderer openssh > /tmp/qemu-install.log 2>&1 \
     || { tail -20 /tmp/qemu-install.log; exit 1; }
 fi
 
@@ -119,7 +123,10 @@ DISK_ARGS=(-drive if=none,id=udisk,format=raw,file="$TESTS/usb.img"
 # ---- SSH control channel ---------------------------------------------------
 echo "generating CI ssh key for the guest control channel"
 rm -f "$TESTS/testkey" "$TESTS/testkey.pub"
-ssh-keygen -q -t ed25519 -N '' -C bnasec-ci -f "$TESTS/testkey"
+ssh-keygen -q -t ed25519 -N '' -C bnasec-ci -f "$TESTS/testkey" \
+  || { echo "!! ssh-keygen failed — openssh missing from the test container?"; exit 1; }
+[ -s "$TESTS/testkey.pub" ] || { echo "!! testkey.pub empty — cannot build the control channel"; exit 1; }
+echo "ci key: $(cat "$TESTS/testkey.pub")"
 SSH_PORT=2222
 SSH_OPTS=(-i "$TESTS/testkey" -p "$SSH_PORT"
           -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
