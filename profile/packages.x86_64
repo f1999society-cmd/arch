@@ -83,7 +83,6 @@ quickshell
 awww
 matugen
 nwg-displays
-ttf-font-awesome
 ttf-nerd-fonts-symbols
 noto-fonts-emoji
 noto-fonts
@@ -94,7 +93,7 @@ grimblast-git
 # settings app setup.sh needs gum; build-tooling preinstalled
 gum
 make
-awk
+gawk
 
 # --------------------------------------------------- desktop utilities
 rofi
