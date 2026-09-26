@@ -86,11 +86,11 @@ lua
 luarocks
 nwg-look
 nwg-displays
-qt5ct
+# qt5 stack removed (~250MiB installed / ~60-70MiB compressed): sddm, dolphin,
+# kvantum and Hyde are all qt6 now — nothing on the ISO runs qt5 anymore.
+# Reinstall on the stick if ever needed: sudo pacman -S qt5ct kvantum-qt5
 qt6ct
 kvantum
-kvantum-qt5
-qt5-wayland
 qt6-wayland
 
 # --------------------------------------------------- applications
@@ -99,7 +99,7 @@ kitty
 fastfetch
 dolphin
 ark
-qt5-imageformats
+# qt5-imageformats removed with the qt5 stack
 ffmpegthumbs
 kde-cli-tools
 kimageformats
@@ -114,7 +114,8 @@ spotify-launcher
 
 # --------------------------------------------------- shell (HyDE: zsh + starship)
 zsh
-fish
+# fish removed (~7MiB compressed) for the 2GiB release cap — zsh is the login
+# shell; fish is one 'sudo pacman -S fish' away
 starship
 
 # --------------------------------------------------- Hyde python tooling (deez dots manager)
@@ -137,9 +138,8 @@ alsa-utils
 
 # --------------------------------------------------- display manager
 sddm
-qt5-quickcontrols
-qt5-quickcontrols2
-qt5-graphicaleffects
+# qt5-quickcontrols/quickcontrols2/graphicaleffects were for old qt5 sddm
+# themes — sddm 0.21 on Arch is qt6; removed with the qt5 stack
 
 # --------------------------------------------------- imaging / media
 imagemagick
