@@ -9,6 +9,13 @@
 # nothing compiles. The light runtime tools are listed explicitly instead —
 # make/gawk stay for scripts that exec them.
 base
+# v3.0.0: keyring data packages MUST be in the ISO — without chaotic-keyring
+# the boot-time 'pacman-key --populate archlinux chaotic' aborts with
+# 'The keyring file /usr/share/pacman/keyrings/chaotic.gpg does not exist'
+# and every guest install reads 'unknown trust' (runs 36282064566+
+# 36288721260). archlinux-keyring listed explicitly for the same reason.
+archlinux-keyring
+chaotic-keyring
 make
 gawk
 patch
