@@ -1,36 +1,53 @@
-# bnasec-arch v3.0.0 — Test Evidence
+# bnasec-arch v3.0.0 — Test Evidence (released ISO rerun)
 
-Visual and log evidence from the final verification run of bnasec-arch v3.0.0
-(CI run 36292483926: **41 PASS / 0 FAIL / 1 WARN**).
+Visual and log evidence from the verification of **the exact ISO published at
+https://github.com/f1999society-cmd/arch/releases/tag/v3.0.0** (downloaded
+from the release inside CI — not a rebuild). Rerun: workflow run
+`36295138374`, **0 FAIL** (the test script exits non-zero on any failure).
 
-## T1 — Boot & Persistence Mount (11 checks)
+An earlier run (36292483926) shipped 17/19 QEMU monitor frames as solid
+black: `screendump` cannot read back a virgl GL scanout. The capture rig was
+fixed (serial-driven phases boot `-device VGA`; desktop phases capture with
+in-guest grim; a BLACK-FRAME detector now flags uniform frames) and every
+frame below was pixel-verified to contain real content. Three frames fired
+in timing gaps (t1-02, t1-03, t5-01: after menu-hide, before first console
+paint) were solid black and are excluded rather than shipped as fake
+"evidence".
+
+## T1 — BIOS boot, persistence mount (11 checks) — QEMU VGA surface
 | File | What it shows |
 |------|---------------|
-| `t1-01-menu.png`, `t1-02-menu.png` | Boot menu: persistent entry selected by default (cow_label=persistence) |
-| `t1-03-early.png` → `t1-06-ready.png` | Boot sequence stages through sshd-ready |
-| `t1-07-probes.png` | Persistence probes: root overlay upperdir on USB cowspace, bind mounts, fsck |
-| `t1-08-desktop.png`, `t1-09-desktop2.png` | First desktop arrivals on live session |
+| `t1-01-menu.png` | GRUB boot menu on the stick (persistent default entry) |
+| `t1-04-mid.png` → `t1-09-desktop2.png` | **The live desktop captured from the monitor itself**: quickshell top bar, dock, welcome window, wallpaper — rendered through the VGA device, 61% lit, 245 gray levels |
 
-## T2 — Session Verification (11 checks)
+## T2 — Session verification (11 checks + T2l)
 | File | What it shows |
 |------|---------------|
-| `t2-01-early.png` | Early session boot |
-| `t2-04-desktop-grim.png` | **Key evidence** — full desktop captured from *inside* Hyprland via grim (486,953 bytes): quickshell top bar, dock, welcome window, wallpaper |
-| `t2-verdict.txt` | `~/.config/bnasec/verdict` → `BAR=quickshell` |
-| `t3-install-tail.txt`, `t3-space.log` | See T3 below |
+| `t2-04-desktop-grim.png` | Desktop captured with grim *inside* the Wayland session (early session) |
+| `t2-05-desktop-late.png` | Same after all environment checks settled (T2l PASS, 486,887 bytes) |
+| `t2-verdict.txt` | `BAR=quickshell WALLPAPER=ok DOCK=ok` |
 
-## T3 — Persistence Stress Test (16 checks)
-LibreOffice 26.8.0-2 installed + 1GB file written → **reboot** → package still
-present, soffice executable, file sha256 byte-identical, 1696 MB consumed from
-the persistent partition. Logs: `t3-install-tail.txt`, `t3-space.log`.
+## T3 — Persistence stress test (16 checks)
+LibreOffice installed into the persistent root (`INSTALL_RC=0`), 1 GB file
+written (sha256 `3a67ed8f…`), space 14.5 GB → 12.78 GB, then **reboot**:
+package still installed, soffice runs, file byte-identical, space consistent.
+Logs: `t3-install-tail.txt`, `t3-space.log`.
+| File | What it shows |
+|------|---------------|
+| `t3b-08-desktop-grim.png` | Post-reboot session, grim capture (dim frame — dark wallpaper) |
 
-## T4 — RAM-only Mode (3 checks)
-`t4-01-early.png`, `t4-02-mid.png`, `t4-03-session.png`
+## T4 — RAM-only mode (3 checks)
+`t4-01-early.png` (quiet-mode console, dim), `t4-02-mid.png` /
+`t4-03-session.png` (session up from the VGA surface).
 
-## T5 — UEFI/OVMF (3 checks)
-`t5-01-ovmf.png`, `t5-02-menu.png`, `t5-03-mid.png`, `t5-04-session.png`
+## T5 — UEFI / OVMF
+`t5-02-menu.png` — **GRUB menu under OVMF firmware**, `t5-03-mid.png` /
+`t5-04-session.png` — UEFI boot reaching the session.
+(A fifth frame, t5-01, landed after firmware output went quiet — excluded.)
 
 ## Other
-- `report-cover.html` — cover art source for the 10-page verification PDF.
+- `report-cover.html` — cover art source for the verification PDF.
 
-ISO + sha256: https://github.com/f1999society-cmd/arch/releases/tag/v3.0.0
+Evidence trail: every PASS line in the report maps to a serial-log marker
+(`BNA_*`), an ssh probe result, or a file read back after a reboot — the
+frames on this page are the visual layer on top of that log evidence.
