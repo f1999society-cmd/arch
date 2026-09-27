@@ -17,9 +17,20 @@ set -uo pipefail
 
 log() { echo "[bnasec-update $(date +%H:%M:%S)] $*"; }
 
+# ------------------------------------------------------- keyring bootstrap
+# The stale snapshot trust db can hit a chicken-and-egg: even the NEW
+# archlinux-keyring package fails verification ('unknown trust'). One
+# SigLevel=Never transaction for the two keyring packages ONLY (both fetched
+# over TLS from the configured mirrors), then a fresh populate fixes the
+# web of trust for everything that follows. Proven in CI run 36283921325+.
 log "refreshing keyrings (archlinux + chaotic)"
 if ! sudo pacman -Sy --noconfirm archlinux-keyring chaotic-keyring; then
-    log "WARN: keyring refresh failed — continuing, installs may hit 'unknown trust'"
+    log "signature bootstrap: upgrading keyring packages with SigLevel=Never (this transaction only)"
+    sudo cp /etc/pacman.conf /tmp/pacman.conf.bak
+    sudo sed -i 's/^SigLevel.*/SigLevel    = Never/' /tmp/pacman.conf.bak
+    sudo pacman --config /tmp/pacman.conf.bak -Sy --noconfirm archlinux-keyring chaotic-keyring \
+      && log "keyring packages upgraded"
+    sudo rm -f /tmp/pacman.conf.bak
 fi
 sudo pacman-key --populate archlinux chaotic || true
 

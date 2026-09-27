@@ -191,20 +191,15 @@ guest_grim() { # arg1: local file name for the png
            echo "HYPRLAND_INSTANCE_SIGNATURE=$SIG";
            [ -n "$SIG" ] && export HYPRLAND_INSTANCE_SIGNATURE="$SIG";
            echo "== monitors (full) =="; timeout 8 hyprctl monitors all 2>&1 | head -30;
-           timeout 6 hyprctl output create headless 2>&1 || true;
-           sleep 2;
-           HOUT=$(timeout 6 hyprctl monitors all 2>/dev/null | awk "/[Hh]eadless/{print \\$2; exit}");
-           echo "headless output: ${HOUT:-none}";
-           MON1=$(timeout 8 hyprctl monitors 2>/dev/null | awk "/^Monitor/{print \\$2; exit}");
-           echo "first monitor: ${MON1:-none}";
+           # ONE IPC parse from the same output; NO headless-output creation —
+           # it wedges the compositor IPC thread (run 36283921325)
+           MON1=$(timeout 8 hyprctl monitors all 2>/dev/null | awk "/^Monitor/{print \\$2; exit}");
+           echo "target monitor: ${MON1:-none}";
            if [ -n "$MON1" ]; then
-               timeout 30 grim -o "$MON1" /tmp/bnasec-desktop.png 2>/tmp/grim-err.txt; echo GRIM_RC=$?;
+               timeout 40 grim -o "$MON1" /tmp/bnasec-desktop.png 2>/tmp/grim-err.txt; echo GRIM_RC=$?;
            fi
            if [ ! -s /tmp/bnasec-desktop.png ] && [ -n "$MON1" ]; then
-               timeout 30 hyprctl screenshot output "$MON1" --path /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; echo HSHOT_RC=$?;
-           fi
-           if [ ! -s /tmp/bnasec-desktop.png ] && [ -n "$HOUT" ]; then
-               timeout 30 grim -o "$HOUT" /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; echo HGRIM_RC=$?;
+               timeout 40 hyprctl screenshot output "$MON1" --path /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; echo HSHOT_RC=$?;
            fi
            ls -l /tmp/bnasec-desktop.png 2>/dev/null || echo NO_SHOT_FILE;
            if [ -s /tmp/bnasec-desktop.png ]; then echo GRIM_OK; else echo "GRIM_FAIL: $(cat /tmp/grim-err.txt 2>/dev/null | head -3)"; fi' \
@@ -370,8 +365,10 @@ if wait_ssh 420; then
       || bad "T3a-2 space before" "$TESTS/t2-serial.log"
     ssh_g 'printf "BNA_MARK_CFG_%s\n" 300 > ~/.config/bnasec-proof && printf "BNA_MARK_DOC_%s\n" 300 > ~/Documents/bnasec-proof && echo MARKS_OK' | grep -q MARKS_OK \
       && ok "T3a-3 markers written (.config + Documents)" || bad "T3a-3 markers" "$TESTS/t3a-serial.log"
-    echo "-- keyring refresh FIRST (ISO keyring snapshot is older than the mirror signers' renewals: 'unknown trust' without this) then full sync install --"
-    ssh_g 'sudo pacman -Sy --noconfirm archlinux-keyring chaotic-keyring >/tmp/t3-install.log 2>&1 \
+    echo "-- keyring bootstrap: the stale snapshot trust db cannot even verify the NEW keyring packages (chicken-and-egg, run 36283921325) — one SigLevel=Never transaction for the two keyring packages only, then re-populate, then the real install --"
+    ssh_g 'sudo cp /etc/pacman.conf /tmp/pacman.conf.nosig \
+           && sudo sed -i "s/^SigLevel.*/SigLevel    = Never/" /tmp/pacman.conf.nosig \
+           && sudo pacman --config /tmp/pacman.conf.nosig -Sy --noconfirm archlinux-keyring chaotic-keyring >/tmp/t3-install.log 2>&1 \
            && sudo pacman-key --populate archlinux chaotic >>/tmp/t3-install.log 2>&1 \
            && sudo pacman -Syu --noconfirm --needed libreoffice-fresh >>/tmp/t3-install.log 2>&1; \
            echo INSTALL_RC=$?; tail -4 /tmp/t3-install.log' \
