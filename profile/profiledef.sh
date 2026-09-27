@@ -33,6 +33,7 @@ file_permissions=(
   ["/usr/local/bin/bnasec-bar"]="0:0:755"
   ["/usr/local/bin/bnasec-space"]="0:0:755"
   ["/usr/local/bin/bnasec-sshd-key"]="0:0:755"
+  ["/usr/local/bin/bnasec-update"]="0:0:755"
   ["/usr/lib/initcpio/hooks/archiso_bnasec"]="0:0:755"
   ["/usr/lib/initcpio/install/archiso_bnasec"]="0:0:644"
   ["/etc/sudoers.d/bnasec"]="0:0:440"

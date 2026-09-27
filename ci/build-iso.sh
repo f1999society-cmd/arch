@@ -423,7 +423,7 @@ chmod 755 "$A/usr/local/bin/bnasec-persist-bind"
 chmod 755 "$A/usr/local/bin/bnasec-fixmodes"
 # v3.0.0 session chain scripts (mode-stripped by mkarchiso if not listed in
 # profiledef file_permissions — they ARE listed; chmod again here as defense)
-for s in bnasec-session bnasec-bar bnasec-space bnasec-sshd-key; do
+for s in bnasec-session bnasec-bar bnasec-space bnasec-sshd-key bnasec-update; do
   [ -f "$A/usr/local/bin/$s" ] || { echo "!! $s missing from profile"; exit 1; }
   chmod 755 "$A/usr/local/bin/$s"
 done
@@ -675,6 +675,7 @@ unsquashfs -f -d "$CHECK" "$SFS" \
   'home/bna/.config/waybar/themes/ml4w-glass-center/config' \
   'usr/local/bin/bnasec-toolbox' 'usr/local/bin/bnasec-persist-bind' 'usr/local/bin/bnasec-fixmodes' \
   'usr/local/bin/bnasec-session' 'usr/local/bin/bnasec-bar' 'usr/local/bin/bnasec-space' \
+  'usr/local/bin/bnasec-update' \
   'usr/local/bin/bnasec-sshd-key' \
   'usr/bin/waybar' 'usr/bin/qs' \
   'usr/lib/qt6/qml/Qt5Compat/GraphicalEffects' \

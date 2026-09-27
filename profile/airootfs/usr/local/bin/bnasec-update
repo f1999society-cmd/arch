@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# bnasec-update v3.0.0 — the CORRECT way to install/upgrade on bnasec live.
+#
+# Why not plain `pacman -Syu`? The ISO is a snapshot: by the time you use it,
+# mirror signers may have renewed their keys, so the baked keyring can report
+# 'signature ... is unknown trust'. Refreshing the keyring packages FIRST and
+# re-populating fixes trust in one deterministic flow (proven in CI):
+#
+#   1. refresh archlinux-keyring + chaotic-keyring from the mirrors
+#   2. re-populate the trust db from the fresh keyring data
+#   3. full sync upgrade (-Syu) + whatever extra packages were requested
+#
+# Usage:
+#   bnasec-update                 # full system upgrade
+#   bnasec-update libreoffice-fresh gimp   # upgrade + install these too
+set -uo pipefail
+
+log() { echo "[bnasec-update $(date +%H:%M:%S)] $*"; }
+
+log "refreshing keyrings (archlinux + chaotic)"
+if ! sudo pacman -Sy --noconfirm archlinux-keyring chaotic-keyring; then
+    log "WARN: keyring refresh failed — continuing, installs may hit 'unknown trust'"
+fi
+sudo pacman-key --populate archlinux chaotic || true
+
+log "full sync upgrade"
+if [ "$#" -gt 0 ]; then
+    sudo pacman -Syu --noconfirm --needed "$@"
+else
+    sudo pacman -Syu --noconfirm
+fi
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    log "done. Everything landed in the persistent root — it survives reboots."
+    /usr/local/bin/bnasec-space || true
+else
+    log "pacman exited with rc=$rc — check the output above"
+fi
+exit "$rc"

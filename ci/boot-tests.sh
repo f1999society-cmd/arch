@@ -191,18 +191,23 @@ guest_grim() { # arg1: local file name for the png
            echo "HYPRLAND_INSTANCE_SIGNATURE=$SIG";
            [ -n "$SIG" ] && export HYPRLAND_INSTANCE_SIGNATURE="$SIG";
            echo "== monitors (full) =="; timeout 8 hyprctl monitors all 2>&1 | head -30;
-           echo "== renderer/seat =="; timeout 8 hyprctl getoption misc:disable_hyprland_qt6_check 2>/dev/null | head -2 || true;
            timeout 6 hyprctl output create headless 2>&1 || true;
            sleep 2;
-           HOUT=$(timeout 6 hyprctl monitors all 2>/dev/null | grep -i headless | head -1 | sed -nE "s/.*[(]([^)]+)[)].*/\1/p");
+           HOUT=$(timeout 6 hyprctl monitors all 2>/dev/null | awk "/[Hh]eadless/{print \\$2; exit}");
            echo "headless output: ${HOUT:-none}";
-           MON1=$(timeout 6 hyprctl monitors 2>/dev/null | awk "/Monitor/{print \\$2; exit}");
+           MON1=$(timeout 8 hyprctl monitors 2>/dev/null | awk "/^Monitor/{print \\$2; exit}");
            echo "first monitor: ${MON1:-none}";
-           if timeout 25 grim /tmp/bnasec-desktop.png 2>/tmp/grim-err.txt; then echo GRIM_OK;
-           elif [ -n "$HOUT" ] && timeout 25 grim -o "$HOUT" /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; then echo GRIM_OK_HEADLESS;
-           elif [ -n "$MON1" ] && timeout 30 hyprctl screenshot output "$MON1" --path /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt && [ -s /tmp/bnasec-desktop.png ]; then echo GRIM_OK_HYPRCTL;
-           elif [ -n "$MON1" ] && timeout 25 grim -o "$MON1" /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; then echo GRIM_OK_MON1;
-           else echo "GRIM_FAIL: $(cat /tmp/grim-err.txt 2>/dev/null | head -2)"; fi' \
+           if [ -n "$MON1" ]; then
+               timeout 30 grim -o "$MON1" /tmp/bnasec-desktop.png 2>/tmp/grim-err.txt; echo GRIM_RC=$?;
+           fi
+           if [ ! -s /tmp/bnasec-desktop.png ] && [ -n "$MON1" ]; then
+               timeout 30 hyprctl screenshot output "$MON1" --path /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; echo HSHOT_RC=$?;
+           fi
+           if [ ! -s /tmp/bnasec-desktop.png ] && [ -n "$HOUT" ]; then
+               timeout 30 grim -o "$HOUT" /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; echo HGRIM_RC=$?;
+           fi
+           ls -l /tmp/bnasec-desktop.png 2>/dev/null || echo NO_SHOT_FILE;
+           if [ -s /tmp/bnasec-desktop.png ]; then echo GRIM_OK; else echo "GRIM_FAIL: $(cat /tmp/grim-err.txt 2>/dev/null | head -3)"; fi' \
         > /tmp/grim-diag.txt 2>&1
     cat /tmp/grim-diag.txt   # full diagnostics land in the CI step log
     grep -q "GRIM_OK" /tmp/grim-diag.txt || return 1
@@ -365,8 +370,11 @@ if wait_ssh 420; then
       || bad "T3a-2 space before" "$TESTS/t2-serial.log"
     ssh_g 'printf "BNA_MARK_CFG_%s\n" 300 > ~/.config/bnasec-proof && printf "BNA_MARK_DOC_%s\n" 300 > ~/Documents/bnasec-proof && echo MARKS_OK' | grep -q MARKS_OK \
       && ok "T3a-3 markers written (.config + Documents)" || bad "T3a-3 markers" "$TESTS/t3a-serial.log"
-    echo "-- installing libreoffice-fresh via full sync (pacman -Syu: the correct transaction on media older than the mirrors — partial -Sy is a known instant-fail) --"
-    ssh_g 'sudo pacman -Syu --noconfirm --needed libreoffice-fresh >/tmp/t3-install.log 2>&1; echo INSTALL_RC=$?; tail -5 /tmp/t3-install.log' \
+    echo "-- keyring refresh FIRST (ISO keyring snapshot is older than the mirror signers' renewals: 'unknown trust' without this) then full sync install --"
+    ssh_g 'sudo pacman -Sy --noconfirm archlinux-keyring chaotic-keyring >/tmp/t3-install.log 2>&1 \
+           && sudo pacman-key --populate archlinux chaotic >>/tmp/t3-install.log 2>&1 \
+           && sudo pacman -Syu --noconfirm --needed libreoffice-fresh >>/tmp/t3-install.log 2>&1; \
+           echo INSTALL_RC=$?; tail -4 /tmp/t3-install.log' \
         | tee "$TESTS/t3-install-tail.txt" | grep -q "INSTALL_RC=0" \
       && ok "T3a-4 libreoffice-fresh installed into the persistent root" \
       || bad "T3a-4 libreoffice install (see t3-install-tail.txt)" "$TESTS/t3-install-tail.txt"
