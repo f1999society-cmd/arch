@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700;900&family=Noto+Serif+SC:wght@400;700;900&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <style>
+    @page { size: 794px 1123px; margin: 0; }
+    :root {
+      --c-bg: #0a1628;
+      --c-accent: #4da8da;
+      --c-text: #e8f0f8;
+      --c-muted: #7a9bb8;
+      --c-glow: #2d7ab3;
+    }
+    html, body { margin: 0; padding: 0; width: 794px; height: 1123px; background: var(--c-bg); color: var(--c-text); font-family: 'Inter', 'Noto Sans SC', sans-serif; }
+    @media screen {
+      html { height: auto; display: flex; justify-content: center; min-height: 100vh; background: var(--c-bg); }
+      body { transform-origin: top center; scale: min(1, calc(100vw / 794), calc(100vh / 1123)); margin: 0 auto; box-shadow: 0 0 60px rgba(0,0,0,0.3); }
+    }
+    .cover { width: 794px; height: 1123px; position: relative; box-sizing: border-box; border: none; outline: none; box-shadow: none; }
+    /* Layer 1 - background glow, clipped */
+    .layer-bg {
+      position: absolute; inset: 0; overflow: hidden; z-index: 1;
+    }
+    .glow-a {
+      position: absolute; top: 40px; left: 60px; width: 420px; height: 420px;
+      background: radial-gradient(circle, rgba(77,168,218,0.08) 0%, rgba(10,22,40,0) 70%);
+    }
+    .glow-b {
+      position: absolute; bottom: 60px; right: 40px; width: 480px; height: 480px;
+      background: radial-gradient(circle, rgba(45,122,179,0.09) 0%, rgba(10,22,40,0) 70%);
+    }
+    /* Layer 2 - luminous frame */
+    .layer-frame { position: absolute; inset: 0; z-index: 2; }
+    .frame {
+      position: absolute; top: 80px; bottom: 80px; left: 60px; right: 60px;
+      border: 2px solid var(--c-accent);
+    }
+    /* Layer 3 - content */
+    .layer-content { position: absolute; inset: 0; z-index: 3; }
+    .kicker {
+      position: absolute; left: 90px; top: 135px;
+      font-size: 11pt; font-weight: 300; letter-spacing: 5px;
+      text-transform: uppercase; color: var(--c-accent);
+    }
+    .title {
+      position: absolute; left: 90px; top: 236px;
+      font-size: 50pt; font-weight: 900; line-height: 1.15;
+      font-family: 'Noto Serif SC', serif;
+      color: var(--c-text); max-width: 600px;
+      text-shadow: 0 0 24px rgba(77,168,218,0.25);
+    }
+    .summary {
+      position: absolute; left: 90px; top: 505px;
+      font-size: 15pt; font-weight: 300; line-height: 1.7;
+      color: var(--c-muted); max-width: 520px;
+    }
+    .org {
+      position: absolute; left: 90px; top: 745px;
+      font-size: 18pt; font-weight: 500; color: var(--c-text);
+    }
+    .org-sub {
+      position: absolute; left: 90px; top: 785px;
+      font-size: 11pt; font-weight: 300; color: var(--c-muted); letter-spacing: 1px;
+    }
+    .date {
+      position: absolute; left: 90px; bottom: 125px;
+      font-size: 10pt; font-weight: 300; color: var(--c-muted); letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <div class="layer-bg">
+      <div class="glow-a"></div>
+      <div class="glow-b"></div>
+    </div>
+    <div class="layer-frame">
+      <div class="frame"></div>
+    </div>
+    <div class="layer-content">
+      <div class="kicker">Release Verification Report</div>
+      <div class="title">bnasec-arch<br>3.0.0</div>
+      <div class="summary">
+        Full verification of the Arch + Hyprland + ML4W live ISO before release:
+        every desktop component, the persistence layer and the package manager
+        tested inside a booted virtual machine, with a rendered-desktop
+        screenshot pulled from the compositor itself.
+      </div>
+      <div class="org">bnasec QA</div>
+      <div class="org-sub">41 PASSED &middot; 0 FAILED &middot; 1 ADVISORY &middot; ISO 1759.4 MB</div>
+      <div class="date">September 27, 2026 &middot; Run 36292483926</div>
+    </div>
+  </div>
+</body>
+</html>
