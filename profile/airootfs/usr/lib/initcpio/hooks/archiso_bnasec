@@ -291,10 +291,41 @@ bnasec_ensure_persist() {
     e2fsck -p "${persist_dev}" >/dev/null 2>&1
     rc=$?
     if [ "${rc}" -ge 4 ]; then
-        bnasec_msg ":: bnasec: persistence fs needs a full repair pass"
-        e2fsck -fy "${persist_dev}" >/dev/null 2>&1 || return 1
+        bnasec_msg ":: bnasec: persistence fs needs a full repair pass (e2fsck -fy, can take a minute on a big stick)"
+        e2fsck -fy "${persist_dev}" >/tmp/bnasec-fsck.log 2>&1
+        frc=$?
+        # e2fsck exit codes: 0 = clean, 1 = errors CORRECTED, 2 = corrected
+        # (reboot advised). All three mean the filesystem is usable — the old
+        # code treated every non-zero as failure and silently dropped to
+        # volatile even after a successful repair (real-hardware regression).
+        if [ "${frc}" -le 2 ]; then
+            bnasec_msg ":: bnasec: persistence fs REPAIRED OK (full log: /run/archiso/bnasec-last-fsck.log)"
+            mv /tmp/bnasec-fsck.log /run/archiso/bnasec-last-fsck.log 2>/dev/null || true
+        else
+            bnasec_msg ":: bnasec: repair pass FAILED (exit ${frc}) — last errors:"
+            tail -n 3 /tmp/bnasec-fsck.log 2>/dev/null | while IFS= read -r _l; do
+                bnasec_msg ":: bnasec:   ${_l}"
+            done
+            # v3.0.1 last resort: real-hardware sticks DO end up with ext4
+            # damage e2fsck cannot fix (unclean power cuts mid-write). Without
+            # this branch the stick fails persistent boot FOREVER, boot after
+            # boot. A fresh filesystem restores the product promise; the only
+            # data it erases was unreadable anyway. Deliberately LOUD.
+            bnasec_msg ":: bnasec: persistence is corrupt beyond repair — RESETTING it to a fresh ext4 (data on the persistence partition is LOST)"
+            mkfs.ext4 -q -m 0 -L persistence "${persist_dev}" || return 1
+            mkdir -p /run/archiso/bnasec-resetmark
+            if mount -o rw "${persist_dev}" /run/archiso/bnasec-resetmark 2>/dev/null; then
+                echo "bnasec persistence was corrupt beyond repair and was RESET to a fresh filesystem (initramfs, $(date -u '+%Y-%m-%dT%H:%M' 2>/dev/null || echo 'this boot')). Previous contents are gone." \
+                    > /run/archiso/bnasec-resetmark/PERSISTENCE-WAS-RESET.txt 2>/dev/null
+                umount /run/archiso/bnasec-resetmark 2>/dev/null
+            fi
+            rmdir /run/archiso/bnasec-resetmark 2>/dev/null
+            bnasec_msg ":: bnasec: fresh persistence filesystem created — persistent mode works again (see PERSISTENCE-WAS-RESET.txt at its root)"
+        fi
+    elif [ "${rc}" -eq 1 ]; then
+        bnasec_msg ":: bnasec: persistence fs: minor fixes applied (preen)"
     elif [ "${rc}" -ge 2 ]; then
-        # fs modified (journal replayed / minor fixes): fine, keep going
+        # fs modified (journal replayed / reboot advised): fine, keep going
         :
     fi
     # reclaim the ext4 root reserve if an older stick still has it

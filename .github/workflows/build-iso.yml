@@ -116,7 +116,7 @@ jobs:
           path: ${{ env.OUT_DIR }}/*.iso
           retention-days: 3
 
-      - name: publish release v3.0.0
+      - name: publish release v3.0.1
         if: ${{ success() && github.event.inputs.skip_tests != 'true' && inputs.publish != 'false' }}
         run: |
           ISO=$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' | head -1)
@@ -125,7 +125,23 @@ jobs:
           SHA=$(awk '{print $1}' "$SHAFILE")
           SIZE=$(du -h "$ISO" | cut -f1)
           cat > release-notes.md <<EOF
-          # bnasec-arch 3.0.0 — the panel fix, PROVEN: packages persist now
+          # bnasec-arch 3.0.1 — persistence SELF-HEAL (corruption can no longer
+          # wedge persistent mode) on top of the 3.0.0 panel fix
+
+          ## 3.0.1 — the real-hardware persistence fix
+          On real sticks an unclean power cut can corrupt the persistence
+          filesystem (ext4 bitmap-checksum errors). Both persistent boot modes
+          then failed while RAM-only still worked. The boot hook now:
+          - runs the full repair pass VISIBLY (e2fsck -fy) and prints
+            "persistence fs REPAIRED OK" on the console
+          - if the filesystem is beyond repair, RESETS it to a fresh one with
+            a loud warning + a PERSISTENCE-WAS-RESET.txt marker at the
+            partition root — persistent mode can never be permanently wedged
+          - no longer misreads a SUCCESSFUL repair (e2fsck exit 1 = errors
+            corrected) as a failure that silently downgrades to RAM-only
+          Proven in CI by the new T3c test: the persistence filesystem is
+          deliberately corrupted host-side, the stick reboots, and the session
+          must come back up in persistent mode with working writes.
 
           Full rebuild of the desktop session + persistence. Every component of
           this release was verified in a booted virtual machine — including
@@ -184,21 +200,21 @@ jobs:
 
           ## Flash
           \`\`\`bash
-          sha256sum bnasec-arch-3.0.0-x86_64.iso
+          sha256sum bnasec-arch-3.0.1-x86_64.iso
           # expected: $SHA
-          sudo dd if=bnasec-arch-3.0.0-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
+          sudo dd if=bnasec-arch-3.0.1-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync
           \`\`\`
           ISO size: $SIZE. Use a 4 GB+ stick; the free space becomes your
           persistence partition on first boot. User: bna, password: bnasec,
           autologin, sudo open. If the bar ever dies: Super+Ctrl+B, or
           \`bnasec-bar switch\`, and read ~/.config/bnasec/verdict.
           EOF
-          gh release delete --repo "$GITHUB_REPOSITORY" v3.0.0 --yes --cleanup-tag 2>/dev/null || true
+          gh release delete --repo "$GITHUB_REPOSITORY" v3.0.1 --yes --cleanup-tag 2>/dev/null || true
           # --repo: gh otherwise shells out to git for repo discovery, and the
           # workspace bind-mount boundary in the container breaks it
           # ('fatal: not a git repository ... up to mount point /')
-          gh release create --repo "$GITHUB_REPOSITORY" v3.0.0 "$ISO" "$SHAFILE" \
-            --title "bnasec-arch-3.0.0 — panel root-cause fix + persistent installs" \
+          gh release create --repo "$GITHUB_REPOSITORY" v3.0.1 "$ISO" "$SHAFILE" \
+            --title "bnasec-arch-3.0.1 — persistence self-heal + panel root-cause fix" \
             --notes-file release-notes.md
           echo "released:"
-          gh release view --repo "$GITHUB_REPOSITORY" v3.0.0 --json assets --jq '.assets[].name'
+          gh release view --repo "$GITHUB_REPOSITORY" v3.0.1 --json assets --jq '.assets[].name'

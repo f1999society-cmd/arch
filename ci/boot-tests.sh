@@ -500,6 +500,51 @@ stop_qemu
 end_shots
 
 # ===========================================================================
+# T3c: persistence SELF-HEAL — corrupt the persist filesystem host-side while
+# the VM is OFF, boot persistent again, require the hook to repair it
+# unattended. Regression test for the real-hardware report (2026-09-27):
+# ext4 bitmap-checksum corruption killed BOTH persistent modes on a real
+# stick while RAM-only still booted fine.
+# ===========================================================================
+echo "== T3c: corrupt persist fs -> boot persistent -> require self-heal =="
+PSTART=$(sfdisk -d "$TESTS/usb.img" 2>/dev/null | sed -n 's/.*start= *\([0-9]*\).*/\1/p' | tail -1)
+PSIZE=$(sfdisk -d "$TESTS/usb.img" 2>/dev/null | sed -n 's/.*size= *\([0-9]*\).*/\1/p' | tail -1)
+if [ -n "$PSTART" ] && [ -n "$PSIZE" ] && [ "$PSIZE" -gt 131072 ] 2>/dev/null; then
+    # 32MB of random over the FIRST 32MB of the persist partition: primary
+    # superblock, group-0 metadata and journal start gone. e2fsck must
+    # recover from a backup superblock (or the hook resets the fs) — either
+    # way the boot MUST come up persistent with working writes.
+    dd if=/dev/urandom of="$TESTS/usb.img" bs=512 seek="$PSTART" count=65536 conv=notrunc status=none
+    echo "corrupted 32MB at sector $PSTART (persist partition of usb.img)"
+    Q "$IT_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
+        "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t3c-serial.log" 2>&1 < /dev/null &
+    QPID=$!
+    if wait_ssh 480; then
+        ok "T3c-1 boot reached ssh DESPITE a corrupted persistence filesystem"
+        grep -aq "needs a full repair pass" "$TESTS/t3c-serial.log" \
+          && ok "T3c-2 corruption detected + full repair pass ran (visible on console)" \
+          || bad "T3c-2 repair pass" "$TESTS/t3c-serial.log"
+        grep -aqE "REPAIRED OK|RESETTING" "$TESTS/t3c-serial.log" \
+          && ok "T3c-3 self-heal outcome reported on console (repaired or reset)" \
+          || bad "T3c-3 self-heal message" "$TESTS/t3c-serial.log"
+        PMNT=$(ssh_g 'findmnt -n -o FSTYPE /var/lib/bnasec-persist 2>/dev/null')
+        [ "$PMNT" = "ext4" ] \
+          && ok "T3c-4 persistence partition mounted again (ext4)" \
+          || bad "T3c-4 persist mount ($PMNT)" "$TESTS/t3c-serial.log"
+        ssh_g 'printf "BNA_T3C_HEALED_%s\n" ok > ~/Documents/bnasec-t3c-proof && sync && cat ~/Documents/bnasec-t3c-proof' | grep -q "BNA_T3C_HEALED_ok" \
+          && ok "T3c-5 persistence WORKS after self-heal (proof written)" \
+          || bad "T3c-5 post-heal write" "$TESTS/t3c-serial.log"
+    else
+        bad "T3c-1 boot after corruption reached ssh" "$TESTS/t3c-serial.log"
+    fi
+    ssh_g 'sudo systemctl poweroff --no-wall' >/dev/null 2>&1 || true
+    sleep 15
+    stop_qemu
+else
+    echo "SKIP  T3c (could not parse persist partition geometry from usb.img)"
+fi
+
+# ===========================================================================
 # T4: RAM-only volatile session on a FRESH stick
 # ===========================================================================
 echo "== T4: RAM-only session =="
