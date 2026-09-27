@@ -8,8 +8,8 @@ if [ "$(tty)" = "/dev/tty1" ] && command -v uwsm >/dev/null 2>&1; then
     # fallback (export).
     if grep -qa QEMU /sys/class/dmi/id/product_name 2>/dev/null \
        || grep -qa QEMU /sys/class/dmi/id/sys_vendor 2>/dev/null; then
-        systemctl --user set-environment AQ_NO_MODIFIERS=1 LIBGL_ALWAYS_SOFTWARE=1 2>/dev/null || true
-        export AQ_NO_MODIFIERS=1 LIBGL_ALWAYS_SOFTWARE=1
+        systemctl --user set-environment AQ_NO_MODIFIERS=1 LIBGL_ALWAYS_SOFTWARE=1 AQ_DRM_DEVICES=/dev/dri/card0 2>/dev/null || true
+        export AQ_NO_MODIFIERS=1 LIBGL_ALWAYS_SOFTWARE=1 AQ_DRM_DEVICES=/dev/dri/card0
     fi
     if ! uwsm start hyprland.desktop 2>/tmp/bnasec-uwsm.log; then
         rm -f /tmp/bnasec-uwsm.log

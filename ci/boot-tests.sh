@@ -183,14 +183,25 @@ guest_grim() { # arg1: local file name for the png
            echo "WAYLAND_DISPLAY=$WD";
            if [ -z "$WD" ]; then echo GRIM_NOWAYLAND; exit 0; fi
            export WAYLAND_DISPLAY="$WD";
-           echo "== monitors (before) =="; timeout 6 hyprctl monitors all 2>&1 | head -20;
+           # hyprctl needs the instance signature of the RUNNING compositor:
+           # without it every hyprctl call dies with "not set!" (run 36279981276)
+           SIG=$(ls "$XDG_RUNTIME_DIR/hypr" 2>/dev/null | head -1);
+           [ -z "$SIG" ] && SIG=$(ls "$HOME/.local/state/hypr" 2>/dev/null | head -1);
+           [ -z "$SIG" ] && SIG=$(ls /tmp/hypr 2>/dev/null | head -1);
+           echo "HYPRLAND_INSTANCE_SIGNATURE=$SIG";
+           [ -n "$SIG" ] && export HYPRLAND_INSTANCE_SIGNATURE="$SIG";
+           echo "== monitors (full) =="; timeout 8 hyprctl monitors all 2>&1 | head -30;
+           echo "== renderer/seat =="; timeout 8 hyprctl getoption misc:disable_hyprland_qt6_check 2>/dev/null | head -2 || true;
            timeout 6 hyprctl output create headless 2>&1 || true;
            sleep 2;
            HOUT=$(timeout 6 hyprctl monitors all 2>/dev/null | grep -i headless | head -1 | sed -nE "s/.*[(]([^)]+)[)].*/\1/p");
            echo "headless output: ${HOUT:-none}";
-           echo "== monitors (after) =="; timeout 6 hyprctl monitors all 2>&1 | grep -iE "monitor|headless" | head -10;
+           MON1=$(timeout 6 hyprctl monitors 2>/dev/null | awk "/Monitor/{print \\$2; exit}");
+           echo "first monitor: ${MON1:-none}";
            if timeout 25 grim /tmp/bnasec-desktop.png 2>/tmp/grim-err.txt; then echo GRIM_OK;
            elif [ -n "$HOUT" ] && timeout 25 grim -o "$HOUT" /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; then echo GRIM_OK_HEADLESS;
+           elif [ -n "$MON1" ] && timeout 30 hyprctl screenshot output "$MON1" --path /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt && [ -s /tmp/bnasec-desktop.png ]; then echo GRIM_OK_HYPRCTL;
+           elif [ -n "$MON1" ] && timeout 25 grim -o "$MON1" /tmp/bnasec-desktop.png 2>>/tmp/grim-err.txt; then echo GRIM_OK_MON1;
            else echo "GRIM_FAIL: $(cat /tmp/grim-err.txt 2>/dev/null | head -2)"; fi' \
         > /tmp/grim-diag.txt 2>&1
     cat /tmp/grim-diag.txt   # full diagnostics land in the CI step log
@@ -261,6 +272,10 @@ grep -aq "BNA_SSHD_active" "$TESTS/t1-serial.log" \
   && ok "T1i sshd active (key-only, no keys = closed)" || bad "T1i sshd" "$TESTS/t1-serial.log"
 grep -aq "bnasec-fixmodes: PASS" "$TESTS/t1-serial.log" \
   && ok "T1j autostart exec bits restored" || bad "T1j fixmodes" "$TESTS/t1-serial.log"
+# v3.0.0: guest installs need a writable+populated pacman keyring through the
+# live overlay (run 36279981276: 'keyring is not writable' killed installs)
+grep -aq "bnasec-fixmodes: KEYRING OK" "$TESTS/t1-serial.log" \
+  && ok "T1k pacman keyring writable + populated (installs possible)" || bad "T1k keyring" "$TESTS/t1-serial.log"
 
 # ===========================================================================
 # T2: second boot on the SAME stick — SSH control channel, env + session
@@ -299,9 +314,11 @@ if wait_ssh 420; then
     else
         bad "T2d grim screenshot" "$TESTS/t2-serial.log"
     fi
-    OMZ=$(ssh_g 'zsh -ic "printf %s $ZSH" 2>/dev/null' | tail -1)
-    echo "$OMZ" | grep -q ".config/ohmyzsh" \
-      && ok "T2e oh-my-zsh loads from the stick ($OMZ)" || bad "T2e oh-my-zsh" "$TESTS/t2-serial.log"
+    # non-interactive probe (zsh -ic prints the ohmyposh prompt into stdout,
+    # which poisoned the grep in rounds 3-4): source omz directly with -f
+    OMZ=$(ssh_g 'zsh -f -c "export ZSH=\$HOME/.config/ohmyzsh; source \$ZSH/oh-my-zsh.sh >/dev/null 2>&1 && echo OMZ_LOADED"' | grep -c OMZ_LOADED)
+    [ "${OMZ:-0}" -ge 1 ] 2>/dev/null \
+      && ok "T2e oh-my-zsh sources cleanly from the stick" || bad "T2e oh-my-zsh" "$TESTS/t2-serial.log"
     ssh_g 'command -v eza && command -v fzf' | grep -q "/eza" \
       && ok "T2f eza + fzf installed" || bad "T2f eza/fzf" "$TESTS/t2-serial.log"
     EZA_LS=$(ssh_g 'zsh -ic "ls ~ >/dev/null 2>&1 && echo LS_OK"' | grep -c LS_OK)
@@ -321,8 +338,8 @@ if wait_ssh 420; then
     AUD=$(ssh_g 'systemctl --user is-active pipewire.socket wireplumber 2>&1' | tr '\n' ' ')
     echo "$AUD" | grep -q "active active" \
       && ok "T2j audio stack up (pipewire.socket + wireplumber)" || bad "T2j audio ($AUD)" "$TESTS/t2-serial.log"
-    # persist-bind verdict from THIS boot
-    BNDS=$(ssh_g 'findmnt -n -o SOURCE /home/bna/.config /home/bna/Documents 2>/dev/null | grep -c "bna"')
+    # persist-bind verdict from THIS boot (findmnt takes ONE mountpoint per call)
+    BNDS=$(ssh_g 'findmnt -n -o SOURCE /home/bna/.config 2>/dev/null; findmnt -n -o SOURCE /home/bna/Documents 2>/dev/null' | grep -c "bna")
     [ "$(echo "$BNDS" | tail -1)" -ge 2 ] 2>/dev/null \
       && ok "T2k .config and Documents binds active in live session" || bad "T2k binds ($BNDS)" "$TESTS/t2-serial.log"
 else
