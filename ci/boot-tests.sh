@@ -201,7 +201,9 @@ guest_grim() { # arg1: local file name for the png
            echo "== monitors (full) =="; echo "$ALL" | head -30;
            # ONE IPC parse from the same output; NO headless-output creation —
            # it wedges the compositor IPC thread (run 36283921325)
-           MON1=$(echo "$ALL" | awk "/^Monitor/{print \\$2; exit}");
+           # escape-free extraction: the guest login shell is zsh and \\$2-style
+           # escapes collapse into awk syntax errors (run 36287459176)
+           MON1=$(echo "$ALL" | grep -m1 "^Monitor" | cut -d" " -f2);
            echo "target monitor: ${MON1:-none}";
            if [ -n "$MON1" ]; then
                timeout 40 grim -o "$MON1" /tmp/bnasec-desktop.png 2>/tmp/grim-err.txt; echo GRIM_RC=$?;
@@ -374,7 +376,8 @@ if wait_ssh 420; then
     ssh_g 'printf "BNA_MARK_CFG_%s\n" 300 > ~/.config/bnasec-proof && printf "BNA_MARK_DOC_%s\n" 300 > ~/Documents/bnasec-proof && echo MARKS_OK' | grep -q MARKS_OK \
       && ok "T3a-3 markers written (.config + Documents)" || bad "T3a-3 markers" "$TESTS/t3a-serial.log"
     echo "-- keyring bootstrap: the stale snapshot trust db cannot even verify the NEW keyring packages (chicken-and-egg, run 36283921325) — one SigLevel=Never transaction for the two keyring packages only, then re-populate, then the real install --"
-    ssh_g 'sudo cp /etc/pacman.conf /tmp/pacman.conf.nosig \
+    ssh_g 'sudo pacman-key --init 2>/dev/null || true; \
+           sudo cp /etc/pacman.conf /tmp/pacman.conf.nosig \
            && sudo sed -i "s/^SigLevel.*/SigLevel    = Never/" /tmp/pacman.conf.nosig \
            && sudo pacman --config /tmp/pacman.conf.nosig -Sy --noconfirm archlinux-keyring chaotic-keyring >/tmp/t3-install.log 2>&1 \
            && sudo pacman-key --populate archlinux chaotic >>/tmp/t3-install.log 2>&1 \

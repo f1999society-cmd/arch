@@ -45,25 +45,28 @@ fix /home/bna/.local/bin
 fix /home/bna/.local/share
 
 # ---------------------------------------------------------------- keyring
-# v3.0.0: the baked /etc/pacman.d/gnupg is not writable through the live
-# overlay (run 36279981276: 'error: keyring is not writable' on the first
-# guest install). Make sure the directory is writable; if it still is not,
-# rebuild the keyring fresh — with the root overlay it persists for good.
+# v3.0.0: the live pacman trust db needs THREE things, all verified here:
+#   1. a writable /etc/pacman.d/gnupg through the overlay
+#   2. a SECRET key — pacman-key --populate local-signs the master keys with
+#      it; without it populate silently produces 'no ultimately trusted keys'
+#      and EVERY package verification dies with 'unknown trust'
+#      (runs 36282064566 + 36287459176)
+#   3. populated archlinux + chaotic keyrings
+# Everything is idempotent; the overlay persists the result across boots.
 KEYRING="/etc/pacman.d/gnupg"
-if [ ! -w "$KEYRING" ] 2>/dev/null || [ ! -e "$KEYRING" ]; then
+if [ ! -e "$KEYRING" ] || [ ! -w "$KEYRING" ]; then
     mkdir -p "$KEYRING"
     chmod 700 "$KEYRING" 2>/dev/null || true
-    if ! pacman-key --gpgdir "$KEYRING" --init >/dev/null 2>&1; then
-        rm -rf "$KEYRING"
-        pacman-key --gpgdir "$KEYRING" --init >/dev/null 2>&1 || true
-    fi
-    pacman-key --gpgdir "$KEYRING" --populate archlinux chaotic >/dev/null 2>&1 || true
 fi
-if [ -w "$KEYRING" ]; then
-    echo "$LOG_TAG: KEYRING OK (writable, populated)"
+pacman-key --gpgdir "$KEYRING" --init >/dev/null 2>&1 || \
+    pacman-key --gpgdir "$KEYRING" --init || true
+pacman-key --gpgdir "$KEYRING" --populate archlinux chaotic >/dev/null 2>&1 || \
+    pacman-key --gpgdir "$KEYRING" --populate archlinux chaotic || true
+if [ -w "$KEYRING" ] && pacman-key --gpgdir "$KEYRING" --list-secret-keys >/dev/null 2>&1; then
+    echo "$LOG_TAG: KEYRING OK (writable, secret key present, populated)"
     KEYRING_OK=1
 else
-    echo "$LOG_TAG: KEYRING FAIL ($KEYRING still not writable — installs will fail)"
+    echo "$LOG_TAG: KEYRING FAIL ($KEYRING unusable — installs will fail)"
     KEYRING_OK=0
 fi
 
