@@ -58,6 +58,16 @@ def ppm_to_png(path: str) -> bool:
     stride = w * 3
     scanlines = b''.join(b'\x00' + raw[y * stride: (y + 1) * stride] for y in range(h))
 
+    # uniform-frame detection: QEMU screendump of a virgl GL scanout yields a
+    # solid-color PPM — zero visual information (run 36292483926 shipped 17
+    # such black frames as "evidence"). Sample the raster and say it loudly
+    # so a black frame can never pass as evidence silently again.
+    step = max(1, (w * h) // 4096)
+    seen = {raw[i * 3: i * 3 + 3] for i in range(0, w * h, step)}
+    if len(seen) <= 2:
+        col = b''.join(b'%02x' % b for b in sorted(seen)[0]).decode()
+        print(f'BLACK-FRAME {path}: uniform color #{col} — NOT usable as visual evidence')
+
     def chunk(ctype: bytes, payload: bytes) -> bytes:
         return (struct.pack('>I', len(payload)) + ctype + payload
                 + struct.pack('>I', zlib.crc32(ctype + payload) & 0xffffffff))

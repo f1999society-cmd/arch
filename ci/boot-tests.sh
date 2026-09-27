@@ -108,11 +108,19 @@ bad() { echo "FAIL  $1"; FAILN=$((FAILN+1)); echo "----- evidence for $1 -----";
 Q() {  # base qemu invocation (arg1: hard timeout seconds, rest: extra args)
     local tmo="$1"; shift
     local mon="none" disp="-display none"
+    # per-phase GPU override: QGPU env beats the probe result. QEMU monitor
+    # 'screendump' CANNOT read back virgl GL scanout (virtio-vga-gl) — every
+    # frame after the kernel's KMS takeover came out as a solid 3057-byte
+    # black PNG (run 36292483926 evidence). VGA scanout is a plain surface
+    # screendump CAN read. Phases whose checks are serial-driven (T1/T4/T5)
+    # run QGPU=VGA for real boot visuals; T2/T3 keep the probed GL GPU because
+    # the desktop itself is under test there and captures go through grim.
+    local gpu="${QGPU:-$GPU_DEVICE}"
     [ -n "${MON_SOCK:-}" ] && mon="unix:$MON_SOCK,server,nowait"
-    [ "$GPU_DEVICE" = virtio-vga-gl ] && disp="-display egl-headless,gl=on"
+    [ "$gpu" = virtio-vga-gl ] && disp="-display egl-headless,gl=on"
     timeout "$tmo" qemu-system-x86_64 -machine q35 -m 3072 -smp 2 \
         -accel "$ACCEL" $disp \
-        -device "$GPU_DEVICE" \
+        -device "$gpu" \
         -monitor "$mon" \
         -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:2222-:22 \
         -no-reboot "$@"
@@ -246,6 +254,9 @@ PERSIST_APPEND="archisobasedir=arch archisolabel=BNASEC300 cow_label=persistence
 echo "== T1: BIOS first boot (persistent entry, root overlay on stick) =="
 make_stick
 MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
+# VGA device for THIS phase only: its screendumps must actually contain the
+# boot menu / console (GL scanout frames read back black — see Q() above)
+QGPU=VGA
 sched_shots 4:t1-01-menu 9:t1-02-menu 25:t1-03-early $((BOOT_WAIT/2)):t1-04-mid \
   $((BOOT_WAIT-30)):t1-05-late $((BOOT_WAIT+5)):t1-06-ready \
   $((BOOT_WAIT+CMD_WAIT+10)):t1-07-probes $((BOOT_WAIT+CMD_WAIT+18)):t1-08-desktop \
@@ -262,6 +273,7 @@ sched_shots 4:t1-01-menu 9:t1-02-menu 25:t1-03-early $((BOOT_WAIT/2)):t1-04-mid 
   echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
     -serial stdio > "$TESTS/t1-serial.log" 2>&1
 end_shots
+unset QGPU   # T2/T3 need the probed GL GPU (desktop under test)
 grep -aq "no persistence partition found, creating one" "$TESTS/t1-serial.log" \
   && ok "T1a persistence partition auto-created on first boot" || bad "T1a auto-persist" "$TESTS/t1-serial.log"
 grep -aq "bnasec: checking persistence filesystem" "$TESTS/t1-serial.log" \
@@ -293,7 +305,9 @@ grep -aq "bnasec-fixmodes: KEYRING OK" "$TESTS/t1-serial.log" \
 # ===========================================================================
 echo "== T2: SSH-driven environment + session checks (same stick, boot 2) =="
 MON_SOCK="$TESTS/qemu-mon.sock"; rm -f "$MON_SOCK"
-sched_shots 25:t2-01-early $((BOOT_WAIT/2)):t2-02-mid $((BOOT_WAIT+60)):t2-03-late
+# NO monitor sched_shots here: this phase runs on the GL GPU where screendump
+# frames read back black after KMS. Real visuals come from in-guest grim
+# (t2-04 early session + t2-05 late session below).
 Q "$IT_WAIT" -kernel "$KERNEL" -initrd "$INITRD" -append "$PERSIST_APPEND" \
     "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t2-serial.log" 2>&1 < /dev/null &
 QPID=$!
@@ -362,6 +376,14 @@ if wait_ssh 420; then
     BNDS=$(ssh_g 'findmnt -n -o SOURCE /home/bna/.config 2>/dev/null; findmnt -n -o SOURCE /home/bna/Documents 2>/dev/null' | grep -c "bna")
     [ "$(echo "$BNDS" | tail -1)" -ge 2 ] 2>/dev/null \
       && ok "T2k .config and Documents binds active in live session" || bad "T2k binds ($BNDS)" "$TESTS/t2-serial.log"
+    # late-session grim shot: env checks settled, desktop fully populated
+    if guest_grim t2-05-desktop-late.png; then
+        SZ=$(stat -c%s "$SHOTS/t2-05-desktop-late.png")
+        [ "$SZ" -gt 20000 ] && ok "T2l late-session desktop screenshot ($SZ bytes)" \
+            || echo "WARN  T2l late grim shot suspiciously small ($SZ)"
+    else
+        echo "WARN  T2l late grim shot unavailable (non-fatal)"
+    fi
 else
     bad "T2a ssh control channel reachable" "$TESTS/t2-serial.log"
 fi
@@ -482,6 +504,7 @@ end_shots
 # ===========================================================================
 echo "== T4: RAM-only session =="
 make_stick
+QGPU=VGA   # serial-driven phase — real boot visuals via screendump
 sched_shots 25:t4-01-early $((BOOT_WAIT/2)):t4-02-mid $((BOOT_WAIT+10)):t4-03-session
 { sleep "$BOOT_WAIT"; echo "printf 'BNA_T4_VOLATILE_%s\\n' ok"; sleep "$CMD_WAIT"; \
   echo "printf 'BNA_T4_NOTMOUNTED_%s\\n' \"\$(findmnt -n -o FSTYPE /var/lib/bnasec-persist 2>/dev/null)\""; sleep 6; } | \
@@ -489,6 +512,7 @@ sched_shots 25:t4-01-early $((BOOT_WAIT/2)):t4-02-mid $((BOOT_WAIT+10)):t4-03-se
     -append "archisobasedir=arch archisolabel=BNASEC300 bnasec_nopersist console=ttyS0,115200n8 quiet loglevel=3" \
     "${DISK_ARGS[@]}" -serial stdio > "$TESTS/t4-serial.log" 2>&1
 end_shots
+unset QGPU
 grep -aq "BNA_T4_VOLATILE_ok" "$TESTS/t4-serial.log" \
   && ok "T4a volatile session boots" || bad "T4a volatile" "$TESTS/t4-serial.log"
 grep -aq "bnasec: RAM-only session — persistence partition untouched" "$TESTS/t4-serial.log" \
@@ -506,6 +530,7 @@ if [ -n "$OVMF_CODE" ]; then
   OVMF_VARS_SRC=$(find /usr/share/edk2 /usr/share/ovmf -name 'OVMF_VARS.4m.fd' -o -name 'OVMF_VARS.fd' 2>/dev/null | head -1)
   cp -f "$OVMF_VARS_SRC" "$TESTS/ovmf-vars.fd"
   make_stick
+  QGPU=VGA   # serial-driven phase — OVMF/GRUB frames must be readable
   sched_shots 15:t5-01-ovmf 60:t5-02-menu $((BOOT_WAIT/2)):t5-03-mid $((BOOT_WAIT+15)):t5-04-session
   { sleep "$BOOT_WAIT"; echo "printf 'BNA_T5_UEFI_READY_%s\\n' ok"; sleep "$CMD_WAIT"; \
     echo "echo bnasec | sudo -S poweroff --no-wall"; sleep "$CMD_WAIT"; } | Q "$HARD_WAIT" "${DISK_ARGS[@]}" \
@@ -513,6 +538,7 @@ if [ -n "$OVMF_CODE" ]; then
       -drive if=pflash,format=raw,file="$TESTS/ovmf-vars.fd" \
       -serial stdio > "$TESTS/t5-serial.log" 2>&1
   end_shots
+  unset QGPU
   grep -aq "BNA_T5_UEFI_READY_ok" "$TESTS/t5-serial.log" \
     && ok "T5 UEFI session reached (serial shell answering)" || bad "T5 UEFI" "$TESTS/t5-serial.log"
 else

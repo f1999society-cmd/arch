@@ -8,11 +8,15 @@ on:
         required: false
         default: "false"
       reuse_iso:
-        description: "skip build, test the ISO artifact from a previous run"
+        description: "skip build: 'true' = reuse bnasec-iso-untested artifact from a previous run, 'release' = download the ISO from release_tag"
         required: false
         default: "false"
       source_run_id:
         description: "run id that uploaded bnasec-iso-untested (required when reuse_iso=true)"
+        required: false
+        default: ""
+      release_tag:
+        description: "release tag to fetch the ISO from (required when reuse_iso=release)"
         required: false
         default: ""
       publish:
@@ -55,8 +59,17 @@ jobs:
           pacman -S --noconfirm --needed archiso git jq github-cli
 
       - name: build ISO (ML4W baked in)
-        if: ${{ inputs.reuse_iso != 'true' }}
+        if: ${{ inputs.reuse_iso != 'true' && inputs.reuse_iso != 'release' }}
         run: bash ci/build-iso.sh
+
+      - name: fetch released ISO (reuse_iso=release)
+        if: ${{ inputs.reuse_iso == 'release' }}
+        run: |
+          mkdir -p "$OUT_DIR"
+          gh release download --repo "$GITHUB_REPOSITORY" "${{ inputs.release_tag }}" \
+            -D "$OUT_DIR" -p '*.iso'
+          ls -la "$OUT_DIR"
+          test -n "$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' | head -1)"
 
       - name: reuse ISO artifact from previous run
         if: ${{ inputs.reuse_iso == 'true' }}
