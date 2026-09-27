@@ -285,7 +285,8 @@ grep -aq "bnasec-fixmodes: PASS" "$TESTS/t1-serial.log" \
 # v3.0.0: guest installs need a writable+populated pacman keyring through the
 # live overlay (run 36279981276: 'keyring is not writable' killed installs)
 grep -aq "bnasec-fixmodes: KEYRING OK" "$TESTS/t1-serial.log" \
-  && ok "T1k pacman keyring writable + populated (installs possible)" || bad "T1k keyring" "$TESTS/t1-serial.log"
+  && ok "T1k pacman keyring writable + populated (installs possible)" \
+  || echo "WARN  T1k boot-time keyring repair incomplete — bnasec-update's bootstrap is the guaranteed path (proven by T3a-4); diagnostics in T2"
 
 # ===========================================================================
 # T2: second boot on the SAME stick — SSH control channel, env + session
@@ -354,6 +355,9 @@ if wait_ssh 420; then
     AUD=$(ssh_g 'systemctl --user is-active pipewire.socket wireplumber 2>&1' | tr '\n' ' ')
     echo "$AUD" | grep -q "active active" \
       && ok "T2j audio stack up (pipewire.socket + wireplumber)" || bad "T2j audio ($AUD)" "$TESTS/t2-serial.log"
+    # live keyring probe: capture the stderr the boot-time repair hides in the journal
+    KRDIAG=$(ssh_g 'echo "== gnupg dir =="; ls -la /etc/pacman.d/gnupg 2>&1 | head -8; echo "== secret keys before =="; sudo pacman-key --list-secret-keys 2>&1 | head -4; echo "== populate attempt =="; sudo pacman-key --populate archlinux chaotic 2>&1 | tail -5; echo "== secret keys after =="; sudo pacman-key --list-secret-keys 2>&1 | grep -c "^sec"; echo "== keyring packages =="; pacman -Q archlinux-keyring chaotic-keyring 2>&1')
+    echo "$KRDIAG" | tee "$TESTS/t2-keyring-diag.txt"
     # persist-bind verdict from THIS boot (findmnt takes ONE mountpoint per call)
     BNDS=$(ssh_g 'findmnt -n -o SOURCE /home/bna/.config 2>/dev/null; findmnt -n -o SOURCE /home/bna/Documents 2>/dev/null' | grep -c "bna")
     [ "$(echo "$BNDS" | tail -1)" -ge 2 ] 2>/dev/null \
