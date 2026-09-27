@@ -190,10 +190,18 @@ guest_grim() { # arg1: local file name for the png
            [ -z "$SIG" ] && SIG=$(ls /tmp/hypr 2>/dev/null | head -1);
            echo "HYPRLAND_INSTANCE_SIGNATURE=$SIG";
            [ -n "$SIG" ] && export HYPRLAND_INSTANCE_SIGNATURE="$SIG";
-           echo "== monitors (full) =="; timeout 8 hyprctl monitors all 2>&1 | head -30;
+           # the compositor IPC is busy right after the session verdict — retry
+           # until 'monitors all' answers (run 36285890840: called 1s too early)
+           ALL="";
+           for t in 1 2 3 4 5 6 7 8; do
+               ALL=$(timeout 8 hyprctl monitors all 2>/dev/null)
+               echo "$ALL" | grep -q "^Monitor" && break
+               echo "ipc retry $t (compositor busy)"; sleep 6
+           done
+           echo "== monitors (full) =="; echo "$ALL" | head -30;
            # ONE IPC parse from the same output; NO headless-output creation —
            # it wedges the compositor IPC thread (run 36283921325)
-           MON1=$(timeout 8 hyprctl monitors all 2>/dev/null | awk "/^Monitor/{print \\$2; exit}");
+           MON1=$(echo "$ALL" | awk "/^Monitor/{print \\$2; exit}");
            echo "target monitor: ${MON1:-none}";
            if [ -n "$MON1" ]; then
                timeout 40 grim -o "$MON1" /tmp/bnasec-desktop.png 2>/tmp/grim-err.txt; echo GRIM_RC=$?;
